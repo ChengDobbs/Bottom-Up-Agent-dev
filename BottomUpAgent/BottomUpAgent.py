@@ -10,7 +10,7 @@ from .utils import image_grounding, cv_to_base64, operations_to_str, image_groun
 from .UnifiedOperation import UnifiedOperation
 from .pre_knowledge import get_pre_knowledge
 import numpy as np
-import keyboard
+from pynput import keyboard as pkb
 from .visualizer import push_data, data_init
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -405,10 +405,23 @@ class BottomUpAgent:
             nonlocal should_exit
             should_exit = True
 
-        keyboard.on_press_key('space', lambda _: toggle_pause())
-        keyboard.on_press_key(']', lambda _: toggle_continuous())
-        keyboard.on_press_key('[', lambda _: request_step())
-        keyboard.on_press_key('/', lambda _: request_exit())
+        def on_press(key):
+            try:
+                if key.char == ' ':
+                    toggle_pause()
+                elif key.char == ']':
+                    toggle_continuous()
+                elif key.char == '[':
+                    request_step()
+                elif key.char == '/':
+                    request_exit()
+            except AttributeError:
+                # prevent shift、ctrl error
+                pass
+
+        listener = pkb.Listener(on_press=on_press)
+        listener.daemon = True
+        listener.start()  # non-blocking listen
 
         print("Running controls:")
         print("Space: Toggle pause")
