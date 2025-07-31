@@ -127,7 +127,7 @@ To navigate through the game steps, follow these instructions:
 ## Visualize
 To visualize the agent's performance, ensure you are in the same conda environment and run the following command **from a new terminal**:
 ```bash
-python BottomUpAgent/visualization.py
+python -m BottomUpAgent.visualizer
 ```
 This starts a server for visualizing **the agent's skill trees and invocation logs** at http://localhost:5000.
 

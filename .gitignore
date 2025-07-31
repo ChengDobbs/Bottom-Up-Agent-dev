@@ -1,11 +1,9 @@
 screenshot.png
-base_model/__pycache__/
+*/__pycache__/
+__pycache__
 logs/
 *.db
-__pycache__
 weights/
-scripts/__pycache__/
-SuperGamer/__pycache__/
 base_model/.env
 wandb/
 results/

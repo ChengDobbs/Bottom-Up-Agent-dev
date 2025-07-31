@@ -12,12 +12,15 @@ import requests
 import pyautogui
 import datetime
 import os
+from BottomUpAgent.Eye import Eye
 from dash import ctx
-import win32gui
 
 # ---- Load config.yaml ----
-with open('config/c5_explore_claude.yaml', 'r') as f:
+with open('config/sts_explore_claude.yaml', 'r') as f:
     default_config = yaml.safe_load(f)
+
+# ---- Initialize Eye ----
+eye = Eye(default_config)
 
 # ---- Global State ----
 global_data = {
@@ -64,23 +67,37 @@ def update_data():
 
 # ---- Screenshot Utility ----
 def capture_frame():
-    window_name = default_config['game_name']
-    hwnd = win32gui.FindWindow(None, window_name)
-    if hwnd:
-        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-        width = right - left
-        height = bottom - top
-    else:
-        left, top, width, height = 0, 0, 1, 1
-    with mss.mss() as s:
-        monitor = {
-            "left": left,
-            "top": top,
-            "width": width,
-            "height": height
-        }
-        img = s.grab(monitor)
-        return Image.frombytes('RGB', img.size, img.rgb)
+    """Capture a frame from the game window."""
+    try:
+        # Try to find the game window using Eye's cross-platform method
+        window_info = None
+
+        # Use the window name from eye instance (configured from config)
+        if eye.window_name:
+            window_info = eye.find_window_cross_platform(eye.window_name)
+
+        if window_info:
+            # Use the found window information
+            left = window_info['left']
+            top = window_info['top']
+            width = window_info['width']
+            height = window_info['height']
+
+            # Capture the window
+            with mss.mss() as sct:
+                monitor = {"top": top, "left": left, "width": width, "height": height}
+                screenshot = sct.grab(monitor)
+                img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+                return img
+        else:
+            # Fallback to full screen capture
+            screenshot = pyautogui.screenshot()
+            return screenshot
+    except Exception as e:
+        print(f"Error capturing frame: {e}")
+        # Fallback to full screen capture
+        screenshot = pyautogui.screenshot()
+        return screenshot
 
 
 def encode_image(img_pil):
@@ -206,7 +223,7 @@ def update_ui(n):
 
     use_record = None
 
-    # 如果在回放模式
+    # Reply mode
     if playback_mode and playback_folder:
         print(playback_folder)
         folder_path = os.path.join(RECORD_DIR, playback_folder)
@@ -223,7 +240,7 @@ def update_ui(n):
                 record = json.load(f)
             use_record = record
 
-            # 更新 global_data 用回放的数据
+            # update global_data using record
             for key in ['config', 'step', 'potential_actions', 'temperature', 'decision', 'action_goal', 'suspend_actions', 'candidate_actions', 'result_tree', 'delete_ids', 'exec_chain', 'explore_tree', 'result']:
                 if key in record:
                     global_data[key] = record[key]
@@ -232,16 +249,16 @@ def update_ui(n):
 
             playback_index += 1
 
-    # ⬇️ 到这里已经确定了 use_record 是否有了
+    # use_record to update global_data
 
-    # 1. 图片
+    # 1. Pic
     if use_record and 'screenshot' in use_record:
         screenshot = use_record['screenshot']
     else:
         img = capture_frame()
         screenshot = encode_image(img)
 
-    # 2. 配置内容
+    # 2. Config
     config_str = json.dumps(global_data['config'], indent=2, ensure_ascii=False)
 
     # 3. Action Goal
@@ -290,8 +307,8 @@ def update_ui(n):
     # 8. Result Text
     result_txt = json.dumps(global_data.get('result', ''), indent=2, ensure_ascii=False)
 
-    # 9. 如果正在记录，保存
-    if recording and not playback_mode:  # 注意：只在非回放模式下记录
+    # 9. Save conditionally
+    if recording and not playback_mode: 
         record = {
             'screenshot': screenshot,
             'config': global_data['config'],
