@@ -17,7 +17,7 @@ try:
     XLIB_AVAILABLE = True
 except ImportError:
     XLIB_AVAILABLE = False
-# print("WINDOWS_AVAILABLE, XLIB_AVAILABLE:",WINDOWS_AVAILABLE, XLIB_AVAILABLE)
+
 class Eye:
     def __init__(self, config):
         self.window_name = config["game_name"]
