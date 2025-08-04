@@ -20,7 +20,7 @@ except ImportError:
 
 class Eye:
     def __init__(self, config):
-        self.window_name = config["game_name"]
+        self.window_name = config['game_name']
         self.left = None
         self.top = None
         self.width = config['eye']['width']
@@ -121,11 +121,10 @@ class Eye:
         width = window_info['width']
         height = window_info['height']
 
-        # Take screenshot using pyautogui (last version: mss)
+        # Take screenshot using pyautogui
         try:
             screenshot = pyautogui.screenshot(region=(left, top, width, height))
-            img = np.array(screenshot)
-            img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
+            img = np.array(screenshot) # to RGB directly, no more need to convert
 
             # Save screenshot for debugging
             # now = time.strftime("%Y-%m-%d-%H-%M-%S")

@@ -7,4 +7,5 @@ weights/
 base_model/.env
 wandb/
 results/
+debug/
 Slay the Spire/objects_no_use

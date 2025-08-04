@@ -6,7 +6,7 @@ import time
 class Hand:
     def __init__(self, config):
 
-        self.game_name = config["game_name"]
+        self.game_name = config['game_name']
         print(f"Hand initialized for game {self.game_name}")
         
 

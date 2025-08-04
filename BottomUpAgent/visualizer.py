@@ -1,6 +1,5 @@
 import yaml
 import json
-import mss
 from PIL import Image
 import io
 import base64
@@ -83,12 +82,10 @@ def capture_frame():
             width = window_info['width']
             height = window_info['height']
 
-            # Capture the window
-            with mss.mss() as sct:
-                monitor = {"top": top, "left": left, "width": width, "height": height}
-                screenshot = sct.grab(monitor)
-                img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
-                return img
+            # Capture the window using pyautogui (consistent with Eye.py)
+            # pyautogui.screenshot() returns PIL Image, which is already in RGB format
+            screenshot = pyautogui.screenshot(region=(left, top, width, height))
+            return screenshot
         else:
             # Fallback to full screen capture
             screenshot = pyautogui.screenshot()

@@ -9,7 +9,7 @@ from .Mcts import MCTS
 
 class LongMemory:
     def __init__(self, config):
-        self.name = config["game_name"]
+        self.name = config['game_name']
         self.longmemory = sqlite3.connect(self.name+'.db')
         self.sim_threshold = config['long_memory']['sim_threshold']
 
