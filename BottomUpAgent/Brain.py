@@ -3,7 +3,7 @@ import sqlite3
 from base_model import creat_base_model
 from . import Prompt
 from . import FunctionCalls
-from .utils import cv_to_base64
+from utils.utils import cv_to_base64
 from .LongMemory import LongMemory
 from .visualizer import push_data
 import numpy as np
@@ -12,7 +12,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 class Brain:
     def __init__(self, config, detector, logger):
-        self.game_name = config["game_name"]
+        self.game_name = config['game_name']
         self.model_name = config['brain']['base_model']
         self.base_model = creat_base_model(config['brain']['base_model'])
         self.evaluate_model = creat_base_model(config['brain']['evaluate_model'])

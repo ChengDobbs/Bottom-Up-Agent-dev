@@ -1,7 +1,7 @@
 from BottomUpAgent.Eye import Eye
 from BottomUpAgent.LongMemory import LongMemory
 from BottomUpAgent.Detector import Detector
-from BottomUpAgent.utils import image_grounding, image_grounding_v2, image_grounding_v3
+from utils.utils import image_grounding, image_grounding_v2, image_grounding_v3
 
 import yaml
 import cv2

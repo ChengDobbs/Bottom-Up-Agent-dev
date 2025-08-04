@@ -6,7 +6,7 @@ from .Brain import Brain
 from .Detector import Detector
 from .Teacher import Teacher
 from .Mcts import MCTS
-from .utils import image_grounding, cv_to_base64, operations_to_str, image_grounding_v3
+from utils.utils import image_grounding, cv_to_base64, operations_to_str, image_grounding_v3
 from .UnifiedOperation import UnifiedOperation
 from .pre_knowledge import get_pre_knowledge
 import numpy as np
@@ -17,9 +17,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class BottomUpAgent:
     def __init__(self, config):
-        self.game_name = config["game_name"]
+        self.game_name = config['game_name']
 
-        self.logger = Logger(config['project_name'], config["game_name"] + ' - ' + config['run_name'], backend='wandb')
+        self.logger = Logger(config['project_name'], config['game_name'] + ' - ' + config['run_name'], backend='wandb')
         self.eye = Eye(config)
         self.hand = Hand(config)
         self.detector = Detector(config)

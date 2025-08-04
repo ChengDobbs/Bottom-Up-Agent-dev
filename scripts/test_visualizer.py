@@ -2,7 +2,7 @@ import json
 import requests
 import cv2
 
-from BottomUpAgent.utils import cv_to_base64
+from utils.utils import cv_to_base64
 BASE_URL = 'http://127.0.0.1:5000'
 
 

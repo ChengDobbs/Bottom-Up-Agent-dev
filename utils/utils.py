@@ -29,6 +29,15 @@ def cv_to_base64(cv_img):
     base64_img = base64.b64encode(buffer.getvalue()).decode("utf-8")
     return base64_img
 
+def save_image(image, path):
+    """
+    Save a PIL Image to a file.
+
+    :param image: PIL Image object
+    :param path: Path to save the image
+    """
+    image.save(path)
+
 def get_window_cuts(cv_img, coords, window_size=64):
     cuts = []
     half_size = int(window_size // 2)
@@ -165,5 +174,4 @@ def operations_to_str(operations):
             result +=  f"RightSingle({op['object_id']}) \n"
 
     return result
-
 

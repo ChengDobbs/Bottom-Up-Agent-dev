@@ -57,6 +57,16 @@ cd Bottom-Up-Agent
 conda create -n bottomup python=3.10 -y
 conda activate bottomup
 ```
+## 2.1 Install PaddlePaddle
+Please refer to [PaddlePaddle Installation](https://www.paddlepaddle.org.cn/en/install/quick) to confirm your OS and CUDA version. The current implementation relies on PaddlePaddle 3.1.0 with CUDA 11.8.
+```bash
+pip install paddlepaddle-gpu==3.1.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/
+```
+For CPU users:
+
+```bash
+pip install paddlepaddle==3.1.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+```
 
 ## 3. Install dependencies
 ```bash
@@ -78,19 +88,35 @@ UI_TARS_API_KEY=your_ui_tars_api_key_here  # for ui-tars baseline, optional for 
 ```bash
 wandb login # enter your WandB API key when prompted
 ```
-## 6. Download & configure the SAM model
+## 6. Download required models
+
+### Download *SAM* models:
   - Download the SAM weights (e.g., `sam_vit_h_4b8939.pth`,`sam_vit_b_01ec64.pth`) from the [Segment Anything Model](https://github.com/facebookresearch/segment-anything) release.
   - Place the file under the root project’s `weights/` folder:
 ```bash
 mkdir -p weights
 cd weights
 curl -O https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth
+# curl -O https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
 cd ..
-# weights/
-# ├── sam_vit_b_01ec64.pth
-# └── sam_vit_h_4b8939.pth
 ```
 
+### Download *OmniParser* models:
+```bash
+python scripts/download_omni_models.py
+```
+
+### Verify model files
+After download completion, your weights directory structure should look like:
+```
+weights/
+├── sam_vit_b_01ec64.pth
+├── sam_vit_h_4b8939.pth # optional
+├── icon_detect/
+│   └── model.pt
+└── icon_caption_florence/
+    └── (model files)
+```
 
 # Usage
 > **⚠️ Note:** Before running the agent, make sure the target game is already launched and in the main interface. 
