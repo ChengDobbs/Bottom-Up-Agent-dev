@@ -8,7 +8,6 @@ from typing import Dict
 # save debug image
 import time
 import os
-now = time.strftime("%Y-%m-%d-%H-%M-%S")
 class Omniparser(object):
     def __init__(
         self, 
@@ -40,9 +39,7 @@ class Omniparser(object):
         """
         image_bytes = base64.b64decode(image_base64)
         image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-        image.save(f'debug/raw_{now}.png')
-        print("raw image saved")
-        print('image size:', image.size)
+        # print('image size:', image.size)
         
         box_overlay_ratio = max(image.size) / 3200
         draw_bbox_config = {
@@ -84,8 +81,10 @@ class Omniparser(object):
             **default_params
         )
         
+        os.makedirs('debug', exist_ok=True)
         result_img = Image.open(io.BytesIO(base64.b64decode(dino_labled_img)))
         # save to debug folder
+        now = time.strftime("%Y-%m-%d-%H-%M-%S")
         result_img.save(f'debug/debug_{now}.png')
 
         return dino_labled_img, label_coordinates, parsed_content_list

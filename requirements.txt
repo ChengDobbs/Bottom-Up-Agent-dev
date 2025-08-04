@@ -30,6 +30,7 @@ wandb>=0.19.9
 python-dotenv
 flask==3.0.3
 dash==3.0.3
+huggingface_hub[hf_transfer]>=0.32.0
 dash_cytoscape==1.0.2
 langgraph 
 langchain
