@@ -42,7 +42,7 @@ Our bottom-up agents learn skills through autonomous exploration and reasoning�
 - [License](#license)  
 
 # Installation
-> 💡 Currently, our implementation supports **Windows** only.  
+> 💡 Currently, our implementation supports both **Windows** and **Linux**.  
 We select games based on the principle of **cross-platform availability via Steam**, ensuring support across **Windows**, **macOS**, and **SteamOS/Linux**, and will improve the adaptation for all platforms in the future.
 
 ## 1. Clone the repository 
@@ -57,8 +57,9 @@ cd Bottom-Up-Agent
 conda create -n bottomup python=3.10 -y
 conda activate bottomup
 ```
-## 2.1 Install PaddlePaddle
-Please refer to [PaddlePaddle Installation](https://www.paddlepaddle.org.cn/en/install/quick) to confirm your OS and CUDA version. The current implementation relies on PaddlePaddle 3.1.0 with CUDA 11.8.
+## 3. Install dependencies
+### 3.1 Install PaddlePaddle
+Please find your OS and CUDA version in [PaddlePaddle Installation](https://www.paddlepaddle.org.cn/en/install/quick). The current implementation relies on PaddlePaddle 3.1.0 with CUDA 11.8.
 ```bash
 pip install paddlepaddle-gpu==3.1.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/
 ```
@@ -68,7 +69,13 @@ For CPU users:
 pip install paddlepaddle==3.1.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
 ```
 
-## 3. Install dependencies
+You can check the PaddlePaddle installation by running:
+```bash
+python -c "import paddle; print(paddle.__version__); paddle.utils.run_check()"
+```
+The current PaddlePaddle v3.1.0 does not support NCCL, please check that you have only **1 single GPU** actually enabled or in a pure CPU environment.
+
+### 3.2 Install other dependencies
 ```bash
 pip install -r requirements.txt
 ```
@@ -90,6 +97,11 @@ wandb login # enter your WandB API key when prompted
 ```
 ## 6. Download required models
 
+### Download *OmniParser* models: (preferably)
+```bash
+python scripts/download_omni_models.py
+```
+
 ### Download *SAM* models:
   - Download the SAM weights (e.g., `sam_vit_h_4b8939.pth`,`sam_vit_b_01ec64.pth`) from the [Segment Anything Model](https://github.com/facebookresearch/segment-anything) release.
   - Place the file under the root project’s `weights/` folder:
@@ -101,21 +113,16 @@ curl -O https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth
 cd ..
 ```
 
-### Download *OmniParser* models:
-```bash
-python scripts/download_omni_models.py
-```
-
 ### Verify model files
 After download completion, your weights directory structure should look like:
 ```
 weights/
-├── sam_vit_b_01ec64.pth
-├── sam_vit_h_4b8939.pth # optional
+├── icon_caption_florence/
+│   └── (1 safetensors, 2 json files)
 ├── icon_detect/
-│   └── model.pt
-└── icon_caption_florence/
-    └── (model files)
+│   └── (1 model.pt, 2 yaml files)
+├── sam_vit_b_01ec64.pth
+└── sam_vit_h_4b8939.pth # optional
 ```
 
 # Usage
@@ -134,12 +141,14 @@ Please adjust the in-game resolution to match the `width` and `height` specified
 | ![Slay the Spire](figs/sts_resolution.jpg) | ![Civilization V](figs/c5_resolution.jpg) |
 
 
-## Run on Slay the Spire
+## Run on Games
+### Slay the Spire
 ```bash
 python -m run --config_file "config/sts_explore_claude.yaml"
+python -m run --config_file "config/sts_omni_claude.yaml"
 ```
 
-## Run on Civilization V
+### Civilization V
 ```bash
 python -m run --config_file "config/c5_explore_claude.yaml"
 ```
@@ -151,12 +160,14 @@ To navigate through the game steps, follow these instructions:
 3. Press `/` to exit dev mode and save the checkpoint of the current run.
    
 ## Visualize
-To visualize the agent's performance, ensure you are in the same conda environment and run the following command **from a new terminal**:
-```bash
-python -m BottomUpAgent.visualizer
-```
-This starts a server for visualizing **the agent's skill trees and invocation logs** at http://localhost:5000.
+To visualize the agent's performance, **open a new terminal**, activate the same conda environment, and run the following command:
 
+```bash
+python -m monitor --config_file "config/sts_omni_claude.yaml" --port 8050
+```
+This will launch a local monitoring server that provides **real-time visualization of the agent's skill trees and library, invocation logs, and action evolution**. By default, the dashboard is available at http://localhost:8050.
+
+You may customize the port by modifying the `--port` argument as needed.
 
 # Results
 ![Result](figs/result.jpg )

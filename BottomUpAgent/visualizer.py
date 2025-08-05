@@ -3,23 +3,68 @@ import json
 from PIL import Image
 import io
 import base64
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from dash import Dash, html, dcc
 import dash_cytoscape as cyto
-from dash.dependencies import Input, Output
+from dash.dependencies import Input, Output, State
 import requests
 import pyautogui
 import datetime
 import os
+import sys
+import argparse
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from BottomUpAgent.Eye import Eye
+from BottomUpAgent.LongMemory import LongMemory
+from BottomUpAgent.Hand import Hand
 from dash import ctx
+import threading
+import time
+
+def load_config(config_file=None):
+    """Load configuration from specified file or default"""
+    if config_file is None:
+        # Default config file
+        config_file = 'config/sts_explore_claude.yaml'
+    
+    # Handle relative paths - make them relative to project root
+    if not os.path.isabs(config_file):
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config_path = os.path.join(project_root, config_file)
+    else:
+        config_path = config_file
+    
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Configuration file not found: {config_path}")
+    
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
+
+# ---- Parse command line arguments ----
+def parse_args():
+    parser = argparse.ArgumentParser(description='Multimodal Agent Visualizer')
+    parser.add_argument('--config_file', type=str, default=None, help='Path to configuration YAML file (default: config/sts_explore_claude.yaml)')
+    parser.add_argument('--host', type=str, default='127.0.0.1', help='Host to bind the server (default: 127.0.0.1)')
+    parser.add_argument('--port', type=int, default=8050, help='Port to bind the server (default: 8050)')
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode')
+    return parser.parse_args()
 
 # ---- Load config.yaml ----
-with open('config/sts_explore_claude.yaml', 'r') as f:
-    default_config = yaml.safe_load(f)
+args = parse_args()
+default_config = load_config(args.config_file)
 
-# ---- Initialize Eye ----
+# ---- Initialize Eye and Hand ----
 eye = Eye(default_config)
+hand = Hand(default_config)
+
+def get_long_memory():
+    """Create a new LongMemory instance for thread safety"""
+    try:
+        return LongMemory(default_config)
+    except Exception as e:
+        print(f"Error creating LongMemory instance: {e}")
+        return None
 
 # ---- Global State ----
 global_data = {
@@ -36,7 +81,9 @@ global_data = {
     'delete_ids': [],
     'exec_chain': [],           # merged: screen, operation
     'explore_tree': [],         # merged: name, state, children
-    'result': ''                # new: to store the result of operations
+    'result': '',               # new: to store the result of operations
+    'skills': [],               # skills list
+    'skill_clusters': []        # skill clusters
 }
 
 RECORD_DIR = os.path.join(os.getcwd(), default_config['result_path'], 
@@ -160,7 +207,41 @@ app.layout = html.Div(style={'font-family': 'Arial, sans-serif', 'margin': '20px
             html.Div(id='run-states', style={'display': 'flex', 'gap': '20px'}),
             html.H2("🎯 Action Goal"),
             html.Div(id='action-goal'),
+        ]),
 
+        # Skills Panel
+        html.Div(style={'flex': 1, 'padding-left': '20px'}, children=[
+            html.H2("🧠 Skills Library"),
+            html.Div(style={'display': 'flex', 'gap': '10px', 'margin-bottom': '10px'}, children=[
+                html.Button('🔄 Refresh Skills', id='refresh-skills'),
+                dcc.Dropdown(
+                    id='skill-filter',
+                    options=[
+                        {'label': 'All Skills', 'value': 'all'},
+                        {'label': 'High Fitness (>2)', 'value': 'high_fitness'},
+                        {'label': 'Frequently Used (>5)', 'value': 'frequent'},
+                        {'label': 'Recent', 'value': 'recent'}
+                    ],
+                    value='all',
+                    style={'width': '150px'}
+                )
+            ]),
+            html.Div(id='skills-list', style={
+                'height': '400px', 
+                'overflow-y': 'auto', 
+                'border': '1px solid #ddd', 
+                'padding': '10px',
+                'background': '#f9f9f9'
+            })
+        ])
+    ]),
+
+    # Second row: Candidate Actions & Exec Chain + Explore Tree
+    html.Div(style={'display': 'flex'}, children=[
+        # Candidate Actions 
+        html.Div(style={'flex': 1}, children=[
+            html.H2("📋 Candidate Actions"),
+            html.Div(id='candidates', style={'display': 'flex', 'flex-wrap': 'wrap'})
         ]),
 
         # Explore Tree
@@ -177,15 +258,8 @@ app.layout = html.Div(style={'font-family': 'Arial, sans-serif', 'margin': '20px
         ])
     ]),
 
-    # second row: Candidate Actions & Exec Chain + LLM + Results
+    # Third row: Exec Chain + LLM + Results
     html.Div(style={'display': 'flex'}, children=[
-        # Candidate Actions 
-        html.Div(style={'flex': 1}, children=[
-            html.H2("📋 Candidate Actions"),
-            html.Div(id='candidates', style={'display': 'flex', 'flex-wrap': 'wrap'})
-        ]),
-
-        #Exec Chain + LLM + Results
         html.Div(style={'flex': 1}, children=[
             html.H2("➡️ Exec Chain & LLM"),
             html.Div(id='exec-chain', style={'display': 'flex', 'flex-wrap': 'wrap', 'align-items': 'center'}),
@@ -194,13 +268,17 @@ app.layout = html.Div(style={'font-family': 'Arial, sans-serif', 'margin': '20px
         ]),
     ]),
 
-    # third row: config
+    # Fourth row: config
     html.Div(
         children=[
             html.H2("⚙️ Config"),
             html.Pre(id='config', style={'whiteSpace': 'pre-wrap'})
         ]
-    )
+    ),
+
+    # Hidden divs for storing state
+    html.Div(id='click-mode-state', style={'display': 'none'}, children='left'),
+    html.Div(id='dummy-output', style={'display': 'none'})
 ])
 
 # ---- Callback to Refresh UI ----
@@ -213,9 +291,12 @@ app.layout = html.Div(style={'font-family': 'Arial, sans-serif', 'margin': '20px
     Output('explore-tree', 'elements'),
     Output('exec-chain', 'children'),
     Output('result-text', 'children'),
-    Input('interval', 'n_intervals')
+    Output('skills-list', 'children'),
+    Input('interval', 'n_intervals'),
+    Input('refresh-skills', 'n_clicks'),
+    State('skill-filter', 'value')
 )
-def update_ui(n):
+def update_ui(n, refresh_clicks, skill_filter):
     global recording, playback_mode, playback_folder, playback_files, playback_index
 
     use_record = None
@@ -304,7 +385,91 @@ def update_ui(n):
     # 8. Result Text
     result_txt = json.dumps(global_data.get('result', ''), indent=2, ensure_ascii=False)
 
-    # 9. Save conditionally
+    # 9. Skills List
+    try:
+        long_memory = get_long_memory()
+        if long_memory is not None:
+            skills = long_memory.get_skills()
+            skill_filter = skill_filter or 'all'
+            
+            # Filter skills based on selection
+            if skill_filter == 'high_fitness':
+                skills = [s for s in skills if s.get('fitness', 0) > 2]
+            elif skill_filter == 'frequent':
+                skills = [s for s in skills if s.get('num', 0) > 5]
+            elif skill_filter == 'recent':
+                skills = sorted(skills, key=lambda x: x.get('id', 0), reverse=True)[:20]
+            
+            skills_div = []
+            for skill in skills[:50]:  # Limit to 50 skills for performance
+                fitness_color = '#4CAF50' if skill.get('fitness', 0) > 2 else '#FF9800' if skill.get('fitness', 0) > 1 else '#F44336'
+                usage_color = '#2196F3' if skill.get('num', 0) > 5 else '#9E9E9E'
+                
+                skill_card = html.Div([
+                    # ID Badge in top-left corner
+                    html.Div(
+                        str(skill.get('id', '?')),
+                        style={
+                            'position': 'absolute',
+                            'top': '-8px',
+                            'left': '-8px',
+                            'background': 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                            'color': 'white',
+                            'width': '24px',
+                            'height': '24px',
+                            'border-radius': '50%',
+                            'display': 'flex',
+                            'align-items': 'center',
+                            'justify-content': 'center',
+                            'font-size': '11px',
+                            'font-weight': 'bold',
+                            'box-shadow': '0 2px 4px rgba(0,0,0,0.2)',
+                            'border': '2px solid white',
+                            'z-index': '10'
+                        }
+                    ),
+                    html.Div([
+                        html.H4(skill.get('name', f"Skill {skill.get('id', 'Unknown')}"), 
+                               style={'margin': '0 0 5px 0', 'color': '#333', 'font-size': '14px', 'padding-left': '10px'}),
+                        html.P(skill.get('description', 'No description'), 
+                              style={'margin': '0 0 10px 0', 'font-size': '12px', 'color': '#666', 'line-height': '1.3'}),
+                        html.Div([
+                            html.Span(f"Fitness: {skill.get('fitness', 0):.2f}", 
+                                    style={'background': fitness_color, 'color': 'white', 'padding': '2px 6px', 
+                                          'border-radius': '3px', 'font-size': '10px', 'margin-right': '5px'}),
+                            html.Span(f"Used: {skill.get('num', 0)}x", 
+                                    style={'background': usage_color, 'color': 'white', 'padding': '2px 6px', 
+                                          'border-radius': '3px', 'font-size': '10px'}),
+                        ], style={'margin-bottom': '5px'}),
+                        html.Details([
+                            html.Summary("Operations", style={'font-size': '11px', 'cursor': 'pointer'}),
+                            html.Pre(json.dumps(skill.get('operations', []), indent=1), 
+                                   style={'font-size': '10px', 'background': '#f5f5f5', 'padding': '5px', 
+                                         'border-radius': '3px', 'max-height': '100px', 'overflow-y': 'auto'})
+                        ])
+                    ])
+                ], style={
+                    'position': 'relative',
+                    'border': '1px solid #ddd', 
+                    'border-radius': '8px', 
+                    'padding': '12px', 
+                    'margin': '8px 0',
+                    'background': 'white',
+                    'box-shadow': '0 2px 6px rgba(0,0,0,0.1)',
+                    'transition': 'transform 0.2s ease, box-shadow 0.2s ease',
+                    'overflow': 'visible'
+                })
+                skills_div.append(skill_card)
+            
+            if not skills_div:
+                skills_div = [html.Div("No skills found", style={'text-align': 'center', 'color': '#999', 'padding': '20px'})]
+        else:
+            skills_div = [html.Div("LongMemory not available", style={'text-align': 'center', 'color': '#999', 'padding': '20px'})]
+            
+    except Exception as e:
+        skills_div = [html.Div(f"Error loading skills: {str(e)}", style={'color': 'red', 'padding': '10px'})]
+
+    # 10. Save conditionally
     if recording and not playback_mode: 
         record = {
             'screenshot': screenshot,
@@ -322,7 +487,7 @@ def update_ui(n):
         }
         record_data(record)
 
-    return screenshot, config_str, ag_div, run_states_div, cand, explore_elements, exec_div, result_txt
+    return screenshot, config_str, ag_div, run_states_div, cand, explore_elements, exec_div, result_txt, skills_div
 
 @app.callback(
     Output('record-status', 'children', allow_duplicate=True),
@@ -375,7 +540,9 @@ def data_init():
         'delete_ids': [],
         'exec_chain': [],           # merged: screen, operation
         'explore_tree': [],         # merged: name, state, children
-        'result': ''                # new: to store the result of operations
+        'result': '',               # new: to store the result of operations
+        'skills': [],               # skills list
+        'skill_clusters': []        # skill clusters
     }
     push_data(init_data)
 
@@ -388,6 +555,18 @@ def record_data(record):
         json.dump(record, f, ensure_ascii=False, indent=2)
 
 
+def main():
+    """Main entry point for the visualizer"""
+    print("Starting Enhanced Visualizer...")
+    print(f"Configuration file: {args.config_file or 'config/sts_explore_claude.yaml'}")
+    print("Features:")
+    print("- 🧠 Skills Library with filtering")
+    print("- 🖱️ Interactive mouse control (click on game image)")
+    print("- ⌨️ Keyboard input support")
+    print("- 🎮 Real-time game monitoring")
+    print(f"\nAccess the visualizer at: http://{args.host}:{args.port}")
+    server.run(host=args.host, port=args.port, debug=args.debug)
+
 # ---- Run Server ----
 if __name__ == '__main__':
-    server.run(debug=True)
+    main()
