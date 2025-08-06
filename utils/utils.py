@@ -64,7 +64,7 @@ def action_grounding(img, action):
     threshold = 0.4
     if max_val >= threshold:
         x, y = max_loc
-        center_x, center_y = x + w // 2, y + h // 2  # 计算中心点
+        center_x, center_y = x + w // 2, y + h // 2  # Calculate center point
         return {"name": action['operation'], "coordinates": [[int(center_x), int(center_y)]]}
     else:
         print("No action found : ", action['action_name'])
@@ -81,7 +81,7 @@ def image_grounding(img1, img2, threshold=0.65):
 
     if max_val >= threshold:
         x, y = max_loc
-        center_x, center_y = x + w // 2, y + h // 2  # 计算中心点
+        center_x, center_y = x + w // 2, y + h // 2  # Calculate center point
         return [int(center_x), int(center_y)], max_val
     else:
         return None, max_val
