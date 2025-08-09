@@ -3,6 +3,8 @@ screenshot.png
 __pycache__
 logs/
 *.db
+*.sqlite3
+*bin
 weights/
 base_model/.env
 wandb/
