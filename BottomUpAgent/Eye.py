@@ -125,7 +125,7 @@ class Eye:
         try:
             screenshot = pyautogui.screenshot(region=(left, top, width, height))
             img = np.array(screenshot) # to RGB directly, no more need to convert
-
+            print('screenshot mode:', screenshot.mode)
             # Save screenshot for debugging
             # now = time.strftime("%Y-%m-%d-%H-%M-%S")
             # logger.log_img_cv(img, f"{now}.png")

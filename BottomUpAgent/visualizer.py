@@ -681,12 +681,6 @@ def update_ui(n, refresh_clicks, skill_filter, search_text):
                     if search_term in skill.get('description', '').lower():
                         filtered_skills.append(skill)
                         continue
-                    
-                    # Search in operations (convert to string and search)
-                    operations_str = json.dumps(skill.get('operations', []), ensure_ascii=False).lower()
-                    if search_term in operations_str:
-                        filtered_skills.append(skill)
-                        continue
                 
                 skills = filtered_skills
             
@@ -724,29 +718,13 @@ def update_ui(n, refresh_clicks, skill_filter, search_text):
                         }
                     ),
                     # Copy JSON Button in top-right corner
-                    html.Button(
-                        html.I(className='fa fa-clipboard'),
+                    html.Button([
+                        html.I(className='fa fa-clipboard copy-icon'),
+                        html.Span('Copy JSON', className='copy-text')
+                    ],
                         id={'type': 'copy-skill-btn', 'index': skill.get('id', 'unknown')},
-                        title="Copy JSON",
-                        style={
-                            'position': 'absolute',
-                            'top': '-8px',
-                            'right': '-8px',
-                            'background': 'linear-gradient(135deg, #28a745 0%, #20c997 100%)',
-                            'color': 'white',
-                            'width': '24px',
-                            'height': '24px',
-                            'border-radius': '50%',
-                            'border': '2px solid white',
-                            'cursor': 'pointer',
-                            'font-size': '10px',
-                            'display': 'flex',
-                            'align-items': 'center',
-                            'justify-content': 'center',
-                            'box-shadow': '0 2px 4px rgba(0,0,0,0.2)',
-                            'z-index': '10',
-                            'transition': 'transform 0.2s ease'
-                        }
+                        className='copy-json-btn',
+                        title="Copy JSON"
                     ),
                     # Hidden div containing the JSON data for copying
                     html.Div(
@@ -894,12 +872,6 @@ def update_skills_search(search_text, skill_filter):
                     if search_term in skill.get('description', '').lower():
                         filtered_skills.append(skill)
                         continue
-                    
-                    # Search in operations (convert to string and search)
-                    operations_str = json.dumps(skill.get('operations', []), ensure_ascii=False).lower()
-                    if search_term in operations_str:
-                        filtered_skills.append(skill)
-                        continue
                 
                 skills = filtered_skills
             
@@ -937,29 +909,13 @@ def update_skills_search(search_text, skill_filter):
                         }
                     ),
                     # Copy JSON Button in top-right corner
-                    html.Button(
-                        html.I(className='fa fa-clipboard'),
+                    html.Button([
+                        html.I(className='fa fa-clipboard copy-icon'),
+                        html.Span('Copy JSON', className='copy-text')
+                    ],
                         id={'type': 'copy-skill-btn', 'index': skill.get('id', 'unknown')},
-                        title="Copy JSON",
-                        style={
-                            'position': 'absolute',
-                            'top': '-8px',
-                            'right': '-8px',
-                            'background': 'linear-gradient(135deg, #28a745 0%, #20c997 100%)',
-                            'color': 'white',
-                            'width': '24px',
-                            'height': '24px',
-                            'border-radius': '50%',
-                            'border': '2px solid white',
-                            'cursor': 'pointer',
-                            'font-size': '10px',
-                            'display': 'flex',
-                            'align-items': 'center',
-                            'justify-content': 'center',
-                            'box-shadow': '0 2px 4px rgba(0,0,0,0.2)',
-                            'z-index': '10',
-                            'transition': 'transform 0.2s ease'
-                        }
+                        className='copy-json-btn',
+                        title="Copy JSON"
                     ),
                     # Hidden div containing the JSON data for copying
                     html.Div(
@@ -1120,65 +1076,22 @@ app.clientside_callback(
                     const buttons = document.querySelectorAll('[id*="copy-skill-btn"]');
                     if (buttons[clickedIndex]) {
                         const btn = buttons[clickedIndex];
-                        const originalText = btn.innerHTML;
-                        const originalBackground = btn.style.background;
+                        const icon = btn.querySelector('.copy-icon');
                         
-                        // Create checkmark animation
-                        btn.innerHTML = '<div class="checkmark-animation">✓</div>';
-                        btn.style.background = 'linear-gradient(135deg, #28a745 0%, #20c997 100%)';
+                        // Add clicked class for CSS animation
+                        btn.classList.add('clicked');
                         
-                        // Add CSS for checkmark animation if not exists
-                        if (!document.getElementById('checkmark-style')) {
-                            const style = document.createElement('style');
-                            style.id = 'checkmark-style';
-                            style.textContent = `
-                                .checkmark-animation {
-                                    animation: checkmark-appear 0.8s ease-out forwards;
-                                    font-size: 12px;
-                                    font-weight: bold;
-                                    color: white;
-                                }
-                                @keyframes checkmark-appear {
-                                    0% {
-                                        opacity: 0;
-                                        transform: scale(0.3) rotate(-45deg);
-                                    }
-                                    50% {
-                                        opacity: 1;
-                                        transform: scale(1.2) rotate(0deg);
-                                    }
-                                    100% {
-                                        opacity: 1;
-                                        transform: scale(1) rotate(0deg);
-                                    }
-                                }
-                                @keyframes checkmark-disappear {
-                                    0% {
-                                        opacity: 1;
-                                        transform: scale(1);
-                                    }
-                                    100% {
-                                        opacity: 0;
-                                        transform: scale(0.8);
-                                    }
-                                }
-                            `;
-                            document.head.appendChild(style);
+                        // Change icon to checkmark
+                        if (icon) {
+                            const originalIcon = icon.className;
+                            icon.className = 'fa fa-check copy-icon';
+                            
+                            // Restore original state after animation
+                            setTimeout(() => {
+                                btn.classList.remove('clicked');
+                                icon.className = originalIcon;
+                            }, 1500);
                         }
-                        
-                        // Start disappear animation after 1.2 seconds
-                        setTimeout(() => {
-                            const checkmark = btn.querySelector('.checkmark-animation');
-                            if (checkmark) {
-                                checkmark.style.animation = 'checkmark-disappear 0.4s ease-in forwards';
-                            }
-                        }, 1200);
-                        
-                        // Restore original state after animation completes
-                        setTimeout(() => {
-                            btn.innerHTML = originalText;
-                            btn.style.background = originalBackground;
-                        }, 1600);
                     }
                 } else {
                     alert('Copy failed, please redo manually with the following text!\\n\\n' + jsonData.substring(0, 200) + '...');

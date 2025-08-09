@@ -1,0 +1,88 @@
+# 向量数据库配置示例
+# 用于配置基于Chroma的对象存储和检索系统
+
+game_name: "Slay the Spire"  # 游戏名称，用作数据库名称
+
+# 长期记忆配置
+long_memory:
+  sim_threshold: 0.85  # 状态相似度阈值
+
+# 向量数据库配置
+vector_memory:
+  similarity_threshold: 0.8  # 对象相似度阈值，用于去重
+  clip_model: "ViT-B/32"     # CLIP模型版本
+  vector_dim: 512            # 向量维度
+  batch_size: 32             # 批处理大小
+  
+  # 图像预处理配置
+  image_preprocessing:
+    target_size: [224, 224]   # 目标图像尺寸
+    normalize: true           # 是否归一化
+    
+  # 相似度匹配配置
+  similarity_matching:
+    high_threshold: 0.9       # 高相似度阈值（认为是同一对象）
+    medium_threshold: 0.7     # 中等相似度阈值（可能相似）
+    low_threshold: 0.5        # 低相似度阈值（不太相似）
+    
+  # 去重策略配置
+  deduplication:
+    enabled: true             # 是否启用去重
+    spatial_threshold: 10     # 空间距离阈值（像素）
+    content_similarity: 0.8   # 内容相似度阈值
+    
+  # 存储优化配置
+  storage_optimization:
+    compress_vectors: false   # 是否压缩向量
+    pca_components: 256       # PCA降维组件数
+    cache_size: 1000         # 缓存大小
+    
+  # 检索配置
+  retrieval:
+    default_top_k: 10         # 默认返回结果数
+    max_results: 50           # 最大结果数
+    enable_reranking: true    # 是否启用重排序
+
+# 检测器配置（与向量数据库集成）
+detector:
+  type: 'omni'  # 使用omni检测器
+  clip_model: 'ViT-B/32'
+  
+  omni:
+    som_model_path: './weights/icon_detect/model.pt'
+    caption_model_name: 'florence2'
+    caption_model_path: './weights/icon_caption_florence'
+    BOX_TRESHOLD: 0.6
+    iou_threshold: 0.4
+    text_overlap_threshold: 0.25
+
+# 数据库路径配置
+database:
+  sqlite_path: "./data/sql/slay_the_spire.db"           # SQLite数据库路径
+  vector_db_path: "./data/vector"        # Chroma向量数据库路径
+  backup_enabled: true                                  # 是否启用备份
+  backup_interval: 3600                                 # 备份间隔（秒）
+
+# 日志配置
+logging:
+  level: "INFO"
+  file: "./logs/vector_memory.log"
+  max_size: "10MB"
+  backup_count: 5
+
+# 性能配置
+performance:
+  use_gpu: false              # 是否使用GPU
+  num_workers: 4             # 工作线程数
+  prefetch_factor: 2         # 预取因子
+  pin_memory: true           # 是否固定内存
+
+# 实验性功能
+experimental:
+  multimodal_fusion: false   # 多模态融合
+  semantic_clustering: false # 语义聚类
+  temporal_tracking: false   # 时序跟踪
+
+eye:
+  width: 1280
+  height: 720

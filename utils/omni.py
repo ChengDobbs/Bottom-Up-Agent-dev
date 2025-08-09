@@ -464,7 +464,6 @@ def get_som_labeled_img(image_source: Union[str, Image.Image], model=None, BOX_T
     # get the index of the first 'content': None
     starting_idx = next((i for i, box in enumerate(filtered_boxes_elem) if box['content'] is None), -1)
     filtered_boxes = torch.tensor([box['bbox'] for box in filtered_boxes_elem])
-    print('len(filtered_boxes):', len(filtered_boxes), starting_idx)
 
     # get parsed icon local semantics
     time1 = time.time()
@@ -474,24 +473,17 @@ def get_som_labeled_img(image_source: Union[str, Image.Image], model=None, BOX_T
             parsed_content_icon = get_parsed_content_icon_phi3v(filtered_boxes, ocr_bbox, image_source, caption_model_processor)
         else:
             parsed_content_icon = get_parsed_content_icon(filtered_boxes, starting_idx, image_source, caption_model_processor, prompt=prompt,batch_size=batch_size)
-        ocr_text = [f"Text Box ID {i}: {txt}" for i, txt in enumerate(ocr_text)]
-        icon_start = len(ocr_text)
         parsed_content_icon_ls = []
         # fill the filtered_boxes_elem None content with parsed_content_icon in order
         for i, box in enumerate(filtered_boxes_elem):
             if box['content'] is None:
                 box['content'] = parsed_content_icon.pop(0)
-        for i, txt in enumerate(parsed_content_icon):
-            parsed_content_icon_ls.append(f"Icon Box ID {str(i+icon_start)}: {txt}")
-        parsed_content_merged = ocr_text + parsed_content_icon_ls
-    else:
-        ocr_text = [f"Text Box ID {i}: {txt}" for i, txt in enumerate(ocr_text)]
-        parsed_content_merged = ocr_text
     print('time to get parsed content:', time.time()-time1)
-
     filtered_boxes = box_convert(boxes=filtered_boxes, in_fmt="xyxy", out_fmt="cxcywh")
 
-    phrases = [i for i in range(len(filtered_boxes))]
+    num_filtered_boxes = len(filtered_boxes)
+    print('NUM of boxes:', num_filtered_boxes, 'OCR:', starting_idx, 'icons:', num_filtered_boxes - starting_idx)
+    phrases = [i for i in range(num_filtered_boxes)]
     
     # draw boxes
     if draw_bbox_config:

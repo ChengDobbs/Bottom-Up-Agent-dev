@@ -41,11 +41,11 @@ class CLIP:
 class Detector:
     def __init__(self, config):
         self.detector_type = config['detector']['type']
-        self.sam_type = config['detector']['sam']['sam_type']
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         if self.detector_type == 'sam':
             sam_config = config['detector']['sam']
-            sam = sam_model_registry[self.sam_type](checkpoint=sam_config['sam_weights'])
+            sam_type = config['detector']['sam']['sam_type']
+            sam = sam_model_registry[sam_type](checkpoint=sam_config['sam_weights'])
             sam = sam.to(self.device)
             
             self.sam_predictor = SamAutomaticMaskGenerator(
@@ -127,6 +127,7 @@ class Detector:
             
             object_meta = {
                 'id': None,
+                'content': '', # SAM doesn't provide content, set to empty string
                 'bbox': [x0, y0, w, h],
                 'area': area,
                 'hash': hash_val,
@@ -148,6 +149,7 @@ class Detector:
         box_cnt = 0
         for box_cnt in range(len(coods_xywh_list)):
             bbox = coods_xywh_list[str(box_cnt)]
+            content = contents_list[box_cnt].get('content','').strip()
             x, y, w, h = bbox
             x0, y0 = int(x), int(y)
             w, h = int(w), int(h)
@@ -189,6 +191,7 @@ class Detector:
             
             object_meta = {
                 'id': None,
+                'content': content, 
                 'bbox': [x0, y0, w, h],
                 'area': area,
                 'hash': hash_val,

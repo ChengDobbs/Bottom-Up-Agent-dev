@@ -6,12 +6,20 @@ from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 import os
 from .Mcts import MCTS
+from .VectorMemory import VectorMemory
 
 class LongMemory:
     def __init__(self, config):
         self.name = config['game_name']
-        self.longmemory = sqlite3.connect(self.name+'.db')
+        # 创建标准化的数据库路径
+        sql_db_dir = './data/sql'
+        os.makedirs(sql_db_dir, exist_ok=True)
+        db_path = os.path.join(sql_db_dir, f'{self.name.lower().replace(" ", "_")}.db')
+        self.longmemory = sqlite3.connect(db_path)
         self.sim_threshold = config['long_memory']['sim_threshold']
+        
+        # 初始化向量数据库
+        self.vector_memory = VectorMemory(config)
 
         if not self.is_initialized():
             self.initialize()
@@ -35,7 +43,7 @@ class LongMemory:
 
         cursor.execute("CREATE TABLE IF NOT EXISTS states (id INTEGER PRIMARY KEY, state_feature BLOB, mcts TEXT, object_ids TEXT, skill_clusters TEXT)")
 
-        cursor.execute("CREATE TABLE IF NOT EXISTS objects (id INTEGER PRIMARY KEY, name TEXT , image BLOB, hash BLOB, area INTEGER)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS objects (id INTEGER PRIMARY KEY, content TEXT , image BLOB, hash BLOB, area INTEGER, vector_id TEXT, bbox TEXT, center TEXT)")
 
         cursor.execute("CREATE TABLE IF NOT EXISTS skills (id INTEGER PRIMARY KEY, name TEXT, description TEXT, operations TEXT, " \
         "fitness REAL, num INTEGER, state_id INTEGER, mcts_node_id INTEGER, image1 BLOB, image2 BLOB)")
@@ -50,34 +58,75 @@ class LongMemory:
     def get_object_by_ids(self, ids):
         objects = []
         cursor = self.longmemory.cursor()
-        cursor.execute('SELECT id, name, image, hash, area FROM objects WHERE id IN ({})'.format(','.join('?'*len(ids))), ids)
+        cursor.execute('SELECT id, content, image, hash, area, vector_id, bbox, center FROM objects WHERE id IN ({})'.format(','.join('?'*len(ids))), ids)
         records = cursor.fetchall()
 
-        for id, name, image_blob, hash_blob, area in records:
+        for record in records:
+            id, content, image_blob, hash_blob, area, vector_id, bbox_str, center_str = record
             image = cv2.imdecode(np.frombuffer(image_blob, np.uint8), cv2.IMREAD_COLOR)
             hash = pickle.loads(hash_blob)
-            objects.append({"id": id, "name": name, "image": image, "hash": hash, "area": area})
+            
+            # 解析JSON字段
+            bbox = json.loads(bbox_str) if bbox_str else []
+            center = json.loads(center_str) if center_str else [0, 0]
+            
+            objects.append({
+                "id": id, 
+                "content": content, 
+                "image": image, 
+                "hash": hash, 
+                "area": area,
+                "vector_id": vector_id,
+                "bbox": bbox,
+                "center": center
+            })
 
         return objects
     
     def update_objects(self, state, objects):
         cursor = self.longmemory.cursor()
         updated_objects_nums = 0
-        for obj in objects:
+        
+        # 使用向量数据库进行智能去重和存储
+        processed_objects = self.vector_memory.update_object_with_vector_storage(objects)
+        
+        for obj in processed_objects:
             if obj['id'] is None:
-                # New object
+                # New object - 存储到SQLite
                 _, image_blob = cv2.imencode('.png', obj['image'])
                 image_blob = image_blob.tobytes()
                 hash_blob = pickle.dumps(obj['hash'])
-                cursor.execute("INSERT INTO objects (image, hash, area) VALUES (?, ?, ?)", (image_blob, hash_blob, obj['area']))
+                
+                cursor.execute(
+                    "INSERT INTO objects (content, image, hash, area, vector_id, bbox, center) VALUES (?, ?, ?, ?, ?, ?, ?)", 
+                    (
+                        obj['content'], 
+                        image_blob, 
+                        hash_blob, 
+                        obj['area'],
+                        obj.get('vector_id', ''),
+                        json.dumps(obj['bbox']),
+                        json.dumps(obj['center'])
+                    )
+                )
                 obj['id'] = cursor.lastrowid
                 state['object_ids'].append(obj['id'])
                 updated_objects_nums += 1
+                
+                print(f"新对象存储: ID={obj['id']}, Content='{obj['content'][:20]}...', Vector_ID={obj.get('vector_id', 'N/A')}")
+            else:
+                # 已存在的对象，可能需要更新向量ID
+                if 'vector_id' in obj:
+                    cursor.execute(
+                        "UPDATE objects SET vector_id = ? WHERE id = ?", 
+                        (obj['vector_id'], obj['id'])
+                    )
         
         cursor.execute("UPDATE states SET object_ids = ? WHERE id = ?", (json.dumps(state['object_ids']), state['id']))
         print(f"Updated objects nums: {updated_objects_nums}")
+        print(f"Vector database stats: {self.vector_memory.get_collection_stats()}")
         self.longmemory.commit()
-        return objects
+        return processed_objects
 
     def get_object_image_by_id(self, id):
         cursor = self.longmemory.cursor()
@@ -281,6 +330,129 @@ class LongMemory:
             skills.append(skill)
 
         return skills
+
+    """   Vector Memory Integration   """
+    
+    def search_similar_objects(self, query_obj: dict, threshold: float = 0.8, top_k: int = 5):
+        """
+        使用向量数据库搜索相似对象
+        
+        Args:
+            query_obj: 查询对象，包含image字段
+            threshold: 相似度阈值
+            top_k: 返回的最大结果数
+            
+        Returns:
+            相似对象列表
+        """
+        return self.vector_memory.find_similar_objects(query_obj, threshold, top_k)
+    
+    def search_objects_by_content(self, content_query: str, top_k: int = 10):
+        """
+        根据内容搜索对象
+        
+        Args:
+            content_query: 内容查询字符串
+            top_k: 返回的最大结果数
+            
+        Returns:
+            匹配的对象列表
+        """
+        return self.vector_memory.search_objects_by_content(content_query, top_k)
+    
+    def get_vector_db_stats(self):
+        """获取向量数据库统计信息"""
+        return self.vector_memory.get_collection_stats()
+    
+    def clear_vector_database(self):
+        """清空向量数据库"""
+        self.vector_memory.clear_database()
+    
+    def find_objects_in_region(self, bbox_region: list, expand_ratio: float = 0.1):
+        """
+        查找指定区域内的对象
+        
+        Args:
+            bbox_region: [x, y, w, h] 区域坐标
+            expand_ratio: 区域扩展比例
+            
+        Returns:
+            区域内的对象列表
+        """
+        cursor = self.longmemory.cursor()
+        cursor.execute('SELECT id, content, bbox, center, vector_id FROM objects WHERE bbox IS NOT NULL')
+        records = cursor.fetchall()
+        
+        region_objects = []
+        x_min, y_min, w, h = bbox_region
+        x_max, y_max = x_min + w, y_min + h
+        
+        # 扩展搜索区域
+        expand_w, expand_h = w * expand_ratio, h * expand_ratio
+        search_x_min = max(0, x_min - expand_w)
+        search_y_min = max(0, y_min - expand_h)
+        search_x_max = x_max + expand_w
+        search_y_max = y_max + expand_h
+        
+        for record in records:
+            obj_id, content, bbox_str, center_str, vector_id = record
+            if bbox_str:
+                obj_bbox = json.loads(bbox_str)
+                obj_x, obj_y, obj_w, obj_h = obj_bbox
+                obj_center_x = obj_x + obj_w / 2
+                obj_center_y = obj_y + obj_h / 2
+                
+                # 检查对象是否在搜索区域内
+                if (search_x_min <= obj_center_x <= search_x_max and 
+                    search_y_min <= obj_center_y <= search_y_max):
+                    region_objects.append({
+                        'id': obj_id,
+                        'content': content,
+                        'bbox': obj_bbox,
+                        'center': json.loads(center_str) if center_str else [obj_center_x, obj_center_y],
+                        'vector_id': vector_id
+                    })
+        
+        return region_objects
+    
+    def get_object_interaction_history(self, object_id: int, limit: int = 10):
+        """
+        获取对象的交互历史（基于技能记录）
+        
+        Args:
+            object_id: 对象ID
+            limit: 返回的最大记录数
+            
+        Returns:
+            交互历史列表
+        """
+        cursor = self.longmemory.cursor()
+        
+        # 查找涉及该对象的技能
+        cursor.execute('''
+            SELECT s.id, s.name, s.description, s.operations, s.fitness, s.num
+            FROM skills s
+            JOIN states st ON s.state_id = st.id
+            WHERE st.object_ids LIKE ?
+            ORDER BY s.id DESC
+            LIMIT ?
+        ''', (f'%{object_id}%', limit))
+        
+        records = cursor.fetchall()
+        interactions = []
+        
+        for record in records:
+            skill_id, name, description, operations_str, fitness, num = record
+            interactions.append({
+                'skill_id': skill_id,
+                'name': name,
+                'description': description,
+                'operations': json.loads(operations_str),
+                'fitness': fitness,
+                'usage_count': num
+            })
+        
+        return interactions
         
 
 

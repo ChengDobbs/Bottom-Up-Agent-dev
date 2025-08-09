@@ -763,7 +763,7 @@ h2:hover .fas {
 }
 
 .skill-card:hover {
-    transform: translateY(-3px) scale(1.005);
+    transform: translateY(-2px) scale(1.002);
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08), 0 3px 8px rgba(102, 126, 234, 0.06);
     border-color: #a0aec0;
     background: linear-gradient(135deg, #ffffff 0%, #fafbff 100%);
@@ -778,7 +778,7 @@ h2:hover .fas {
 
 /* Copy button hover effect */
 .skill-card:hover button {
-    transform: scale(1.05) rotate(-2deg);
+    transform: scale(1.05);
     box-shadow: 0 2px 6px rgba(40, 167, 69, 0.2);
 }
 
@@ -929,4 +929,103 @@ h2:hover .fas {
 .skill-card:hover span[style*="#2196F3"] {
     background: linear-gradient(135deg, #2196F3 0%, #3FA9F5 100%) !important;
     transform: scale(1.02);
+}
+
+/* Copy JSON Button Styles */
+.copy-json-btn {
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    background: #28a745;
+    color: white;
+    height: 24px;
+    border-radius: 12px;
+    border: 2px solid white;
+    cursor: pointer;
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    z-index: 10;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow: hidden;
+    white-space: nowrap;
+    width: 24px;
+    padding: 0;
+}
+
+.copy-json-btn .copy-icon {
+    transition: all 0.3s ease;
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.copy-json-btn .copy-text {
+    opacity: 0;
+    transform: translateX(-10px);
+    transition: all 0.3s ease;
+    margin-left: 0;
+    font-size: 9px;
+    font-weight: 500;
+    white-space: nowrap;
+    width: 0;
+    overflow: hidden;
+}
+
+/* Hover state - expand to show text */
+.copy-json-btn:hover {
+    width: auto;
+    min-width: 70px;
+    border-radius: 12px;
+    padding: 0 8px 0 4px;
+    background: #20c997;
+    transform: scale(1.05);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.25);
+}
+
+.copy-json-btn:hover .copy-text {
+    opacity: 1;
+    transform: translateX(0);
+    width: auto;
+    margin-left: 4px;
+}
+
+.copy-json-btn:hover .copy-icon {
+    transform: scale(0.9);
+}
+
+/* Click state - show checkmark */
+.copy-json-btn.clicked {
+    background: #28a745;
+    width: 24px;
+    border-radius: 12px;
+    padding: 0;
+    animation: clickSuccess 0.6s ease;
+}
+
+.copy-json-btn.clicked .copy-text {
+    opacity: 0;
+    width: 0;
+    margin-left: 0;
+}
+
+.copy-json-btn.clicked .copy-icon::before {
+    content: '✓';
+    font-family: inherit;
+    font-style: normal;
+}
+
+@keyframes clickSuccess {
+    0% {
+        transform: scale(1.05);
+    }
+    50% {
+        transform: scale(1.15);
+        background: #28a745;
+        box-shadow: 0 0 15px rgba(40, 167, 69, 0.4);
+    }
+    100% {
+        transform: scale(1);
+    }
 }
