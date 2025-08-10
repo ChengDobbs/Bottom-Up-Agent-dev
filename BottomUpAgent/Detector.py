@@ -143,13 +143,15 @@ class Detector:
         height, width = image.shape[:2]
         image_area = height * width
         base64_encoded_img = cv_to_base64(image)
-        _, coods_xywh_list, contents_list = self.omniparser.parse(base64_encoded_img)
+        labled_img, coods_xywh_list, contents_list = self.omniparser.parse(base64_encoded_img)
+
         objects = []
 
         box_cnt = 0
         for box_cnt in range(len(coods_xywh_list)):
             bbox = coods_xywh_list[str(box_cnt)]
-            content = contents_list[box_cnt].get('content','').strip()
+            content_text = contents_list[box_cnt].get('content','').strip()
+            obj_type = contents_list[box_cnt].get('type','')
             x, y, w, h = bbox
             x0, y0 = int(x), int(y)
             w, h = int(w), int(h)
@@ -188,20 +190,22 @@ class Detector:
 
             if is_duplicate:
                 continue
-            
+
             object_meta = {
                 'id': None,
-                'content': content, 
+                'content':  content_text, 
                 'bbox': [x0, y0, w, h],
                 'area': area,
                 'hash': hash_val,
+                'type': obj_type,
                 'center': (center_x, center_y),
                 'image': cropped
             }
             # print(object_meta)
             objects.append(object_meta)
 
-        return objects
+        return objects, labled_img
+
     def _average_hash(self, image: np.ndarray) -> str:
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         resized = cv2.resize(gray, (8, 8))

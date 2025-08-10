@@ -10,7 +10,7 @@ long_memory:
 # 向量数据库配置
 vector_memory:
   similarity_threshold: 0.3  # 对象相似度阈值，用于去重
-  embedding_type: ""
+  embedding_type: "open_clip"
   clip_model: "ViT-B/32"     # CLIP模型版本
   vector_dim: 512            # 向量维度
   batch_size: 32             # 批处理大小
