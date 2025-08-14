@@ -1,7 +1,23 @@
 # 向量数据库配置示例
 # 用于配置基于Chroma的对象存储和检索系统
+project_name: 'SuperGamer'
+game_name: 'Slay the Spire'
+run_name: 'claude - omni - test1'
+close_explore: False
+close_reflexion: False
+close_reset: False
+is_base: False
 
-game_name: "Slay the Spire"  # 游戏名称，用作数据库名称
+result_path: 'results'
+
+teacher_type: 'Random' # Human or AI or Random
+
+brain:
+  base_model: 'claude-3-7-sonnet-20250219' # gpt-4o or claude-3-7-sonnet-20250219
+  evaluate_model: 'gpt-4o'
+
+  uct_c: 5.0
+  uct_threshold: 0.0
 
 # 长期记忆配置
 long_memory:

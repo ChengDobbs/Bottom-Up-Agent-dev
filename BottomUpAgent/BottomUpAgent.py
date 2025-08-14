@@ -32,13 +32,12 @@ class BottomUpAgent:
         self.operates = config['operates'] if 'operates' in config else ['Click']
         self.max_operation_length = config['max_operation_length'] if 'max_operation_length' in config else 2
         self.is_base = config['is_base'] if 'is_base' in config else False
-        self.exec_duration = config['exec_duration'] if 'exec_duration' in config else 3.0
+        self.exec_duration = config['exec_duration'] if 'exec_duration' in config else 0.8
 
         self.suspended_skill_cluster_ids = []
 
         print(f"GameAgent initialized")
         print(f"game_name: {self.game_name}")
-
 
     def get_observation(self):
         screen = self.eye.get_screenshot_cv()
@@ -80,7 +79,6 @@ class BottomUpAgent:
 
 
     
-
     def run_step(self, step, task):
         self.logger.log({"step": step}, step)
         # get screen 
@@ -146,7 +144,6 @@ class BottomUpAgent:
 
         self.brain.skill_evolution(step, skills, skill_cluster) 
         
-        
     def skill_augment(self, step, state, node):
         """
         Generate new skill by augmenting the existing skill.
@@ -163,6 +160,8 @@ class BottomUpAgent:
             if operation_ is None:
                 return None, True
             self.hand.do_operation(operation_, self.eye.left, self.eye.top)
+            print("wait for operations to finish......")
+
             time.sleep(self.exec_duration)
             obs.append(self.get_observation())
 
@@ -202,6 +201,7 @@ class BottomUpAgent:
         operation_ = self.operate_grounding(select_operation, obs[-1])
 
         self.hand.do_operation(operation_, self.eye.left, self.eye.top)
+        print("wait for operations to finish......")
         time.sleep(self.exec_duration)
         obs.append(self.get_observation())
         operations.append(select_operation)
@@ -221,7 +221,7 @@ class BottomUpAgent:
             print("Operation not acted")
             return None, False
 
-
+    
     def explore(self, step, state, skill, skill_clusters):
         if self.close_explore:
             return 'ExploreFail'
@@ -287,7 +287,8 @@ class BottomUpAgent:
                 return 'Fail'
 
             self.hand.do_operation(operation_, self.eye.left, self.eye.top)
-            time.sleep(2.0)
+            print("wait for operations to finish......")
+            time.sleep(self.exec_duration)
         obs.append(self.get_observation())
         exec_chain.append({'screen': f'data:image/png;base64,{cv_to_base64(obs[-1]["screen"])}'})
         push_data({'exec_chain': exec_chain})
@@ -348,7 +349,9 @@ class BottomUpAgent:
         if operation is None:
             return 'Continue'
         self.hand.do_operation(operation, self.eye.left, self.eye.top)
-        time.sleep(3.0)
+        print("wait for operations to finish......")
+
+        time.sleep(self.exec_duration)
         states.append(self.get_state())
 
         if not self.eye.detect_acted_cv(states[-2]['screen'], states[-1]['screen']):
@@ -380,7 +383,7 @@ class BottomUpAgent:
         push_data({'exec_chain': [{'screen': im1, 'operation': operation}, {'screen': im2}]})
         return 'Continue'
 
-        
+    
     def run(self, task, max_step=50):
         is_paused = True
         is_continuous = False
@@ -459,7 +462,7 @@ class BottomUpAgent:
 
             time.sleep(0.1)  # Small delay between steps
             step += 1
-
+    
     def state_reset(self):
         if self.close_reset:
             return
@@ -467,4 +470,6 @@ class BottomUpAgent:
             x = self.eye.left + 100
             y = self.eye.top + 100
             self.hand.right_single_click(x, y)
-            time.sleep(1.0)
+            print("wait for operations to finish......")
+
+            time.sleep(0.2)

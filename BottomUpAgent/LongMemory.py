@@ -83,12 +83,26 @@ class LongMemory:
 
         return objects
     
-    def update_objects(self, state, objects):
+    def update_objects(self, state, objects, text_weight=0.3, image_weight=0.5, bbox_weight=0.2, bbox_scale=1000.0):
+        """
+        更新对象到长期记忆中
+        
+        Args:
+            state: 当前状态
+            objects: 对象列表
+            text_weight: 文本相似度权重
+            image_weight: 图像相似度权重
+            bbox_weight: 位置相似度权重
+            bbox_scale: 位置距离缩放因子
+        """
         cursor = self.longmemory.cursor()
         updated_objects_nums = 0
         
-        # 使用向量数据库进行智能去重和存储
-        processed_objects = self.vector_memory.update_object_with_vector_storage(objects)
+        # 使用向量数据库进行智能去重和存储（使用mixed方式）
+        processed_objects = self.vector_memory.update_object_with_vector_storage(
+            objects, text_weight=text_weight, image_weight=image_weight, 
+            bbox_weight=bbox_weight, similarity_threshold=0.85
+        )
         
         for obj in processed_objects:
             if obj['id'] is None:

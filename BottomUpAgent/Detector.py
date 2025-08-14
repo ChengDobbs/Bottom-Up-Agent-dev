@@ -139,11 +139,14 @@ class Detector:
 
         return objects
 
-    def extract_objects_omni(self, image: np.ndarray) -> List[Dict]:
+    def extract_objects_omni(self, image: np.ndarray, get_parsed_img = False) -> List[Dict]:
         height, width = image.shape[:2]
         image_area = height * width
         base64_encoded_img = cv_to_base64(image)
-        labled_img, coods_xywh_list, contents_list = self.omniparser.parse(base64_encoded_img)
+        if get_parsed_img: # avoid returning a tuple
+            labeled_img, coods_xywh_list, contents_list = self.omniparser.parse(base64_encoded_img)
+        else:
+            _, coods_xywh_list, contents_list = self.omniparser.parse(base64_encoded_img)
 
         objects = []
 
@@ -203,8 +206,11 @@ class Detector:
             }
             # print(object_meta)
             objects.append(object_meta)
-
-        return objects, labled_img
+        
+        if get_parsed_img:
+            return objects, labeled_img
+        else:
+            return objects
 
     def _average_hash(self, image: np.ndarray) -> str:
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)

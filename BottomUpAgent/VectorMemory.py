@@ -1,5 +1,4 @@
 import chromadb
-from chromadb.config import Settings
 import torch
 import clip
 import cv2
@@ -13,7 +12,7 @@ from typing import List, Dict, Optional, Tuple
 import os
 import logging
 from chromadb.utils.embedding_functions import known_embedding_functions
-from chromadb import Client, Settings, Documents, EmbeddingFunction, Embeddings
+from chromadb import Documents, EmbeddingFunction, Embeddings
 
 class VectorMemory:
     """
@@ -42,12 +41,16 @@ class VectorMemory:
         # 获取配置中的embedding_type
         self.embedding_type = config.get('vector_memory', {}).get('embedding_type', None)
         
-        self.client = Client(Settings(
-            persist_directory=self.vector_db_path,
-            anonymized_telemetry=False
-        ))
-        self.clear_database()
-        # init Chroma client
+        # 创建持久化客户端
+        self.client = chromadb.PersistentClient(path=self.vector_db_path)
+        
+        # 检查是否需要清空数据库
+        clear_on_init = config.get('vector_memory', {}).get('clear_on_init', False)
+        if clear_on_init:
+            self.logger.info("配置要求清空向量数据库")
+            self.clear_database()
+        
+        # 初始化Chroma数据库 - get_or_create_collection会自动处理创建逻辑
         self._init_chroma_db()
         
     def _init_chroma_db(self):
@@ -414,13 +417,18 @@ class VectorMemory:
             self.logger.error(f"相似度搜索失败: {e}")
             return []
     
-    def deduplicate_objects(self, objects: List[Dict], threshold: float = None) -> Tuple[List[Dict], List[Dict]]:
+    def deduplicate_objects(self, objects: List[Dict], threshold: float = None, 
+                           text_weight: float = 0.3, image_weight: float = 0.5, 
+                           bbox_weight: float = 0.2) -> Tuple[List[Dict], List[Dict]]:
         """
-        对象去重处理
+        对象去重处理，使用混合相似性检测
         
         Args:
             objects: 待处理的对象列表
             threshold: 去重阈值
+            text_weight: 文本相似性权重
+            image_weight: 图像相似性权重
+            bbox_weight: 边界框相似性权重
             
         Returns:
             (新对象列表, 重复对象列表)
@@ -432,26 +440,40 @@ class VectorMemory:
         duplicate_objects = []
         
         for obj in objects:
-            similar_objects = self.find_similar_objects(obj, threshold=threshold, top_k=1)
-            
-            if similar_objects:
+            # 使用混合查询进行更精确的相似性检测
+            similar_objects = self.query_collection_mixed(
+                obj, 
+                top_k=1, 
+                text_weight=text_weight, 
+                image_weight=image_weight, 
+                bbox_weight=bbox_weight
+            )
+            __import__('pdb').set_trace
+            if similar_objects and similar_objects[0]['similarity'] >= threshold:
                 # 找到相似对象，标记为重复
                 duplicate_objects.append({
                     'original': obj,
                     'similar': similar_objects[0]
                 })
+                print(f"检测到重复对象: {obj.get('content', 'Unknown')[:20]} (相似度: {similar_objects[0]['similarity']:.3f})")
             else:
                 # 新对象
                 new_objects.append(obj)
         
         return new_objects, duplicate_objects
     
-    def update_object_with_vector_storage(self, objects: List[Dict]) -> List[Dict]:
+    def update_object_with_vector_storage(self, objects: List[Dict], 
+                                         text_weight: float = 0.3, image_weight: float = 0.5, 
+                                         bbox_weight: float = 0.2, similarity_threshold: float = None) -> List[Dict]:
         """
-        更新对象并存储到向量数据库
+        更新对象并存储到向量数据库，使用混合相似性检测
         
         Args:
             objects: 对象列表
+            text_weight: 文本相似性权重
+            image_weight: 图像相似性权重
+            bbox_weight: 边界框相似性权重
+            similarity_threshold: 相似性阈值
             
         Returns:
             处理后的对象列表
@@ -459,8 +481,14 @@ class VectorMemory:
         if not objects:
             return []
         
-        # 去重处理
-        new_objects, duplicate_objects = self.deduplicate_objects(objects)
+        # 使用混合相似性进行去重处理
+        new_objects, duplicate_objects = self.deduplicate_objects(
+            objects, 
+            threshold=similarity_threshold, 
+            text_weight=text_weight, 
+            image_weight=image_weight, 
+            bbox_weight=bbox_weight
+        )
         
         # 存储新对象
         if new_objects:
@@ -475,15 +503,15 @@ class VectorMemory:
             similar = dup['similar']
             
             # 更新原对象的ID为相似对象的ID
-            original['id'] = similar['object_id']
-            original['vector_id'] = similar['id']
+            original['id'] = similar.get('object_id', similar.get('id'))
+            original['vector_id'] = similar.get('id')
             
-            self.logger.info(f"对象去重: {original.get('content', 'Unknown')} -> {similar['id']}")
+            self.logger.debug(f"对象去重: {original.get('content', 'Unknown')} -> {similar.get('id')}(相似度: {similar.get('mixed_similarity', 0):.3f})")
         
         # 合并结果
         all_objects = new_objects + [dup['original'] for dup in duplicate_objects]
         
-        self.logger.info(f"对象处理完成: 新增 {len(new_objects)}, 去重 {len(duplicate_objects)}")
+        self.logger.debug(f"对象处理完成: 新增 {len(new_objects)}, 去重 {len(duplicate_objects)}")
         return all_objects
     
     def query_collection_by_text(self, content_query: str, top_k: int = 10) -> List[Dict]:
@@ -547,6 +575,7 @@ class VectorMemory:
                         'center': json.loads(metadata['center']),
                         'type': metadata['type'],
                         'object_id': metadata['object_id'],
+                        'hash': metadata.get('hash', ''),
                         'distance': distance,
                         'similarity': similarity,
                         'embedding': embedding
@@ -619,6 +648,7 @@ class VectorMemory:
                         'center': json.loads(metadata['center']),
                         'type': metadata['type'],
                         'object_id': metadata['object_id'],
+                        'hash': metadata.get('hash', ''),
                         'distance': distance,
                         'similarity': similarity,
                         'embedding': embedding
@@ -667,6 +697,10 @@ class VectorMemory:
             综合相似度排序的对象列表
         """
         try:
+            # 为query_obj生成hash（如果没有的话）
+            if 'hash' not in query_obj or not query_obj['hash']:
+                query_obj['hash'] = self._generate_object_hash(query_obj)
+            
             # 获取所有候选对象（使用较大的候选数量）
             candidate_k = max(min(top_k * 5, 200), 50)  # 确保有足够的候选对象用于重排序
             
@@ -690,9 +724,16 @@ class VectorMemory:
             if not all_candidates:
                 # 使用一个通用查询获取所有对象
                 try:
+                    collection_count = self.object_collection.count()
+                    n_results = max(1, min(candidate_k, collection_count))  # 确保n_results至少为1
+                    
+                    if collection_count == 0:
+                        self.logger.warning("向量数据库为空，无法获取候选对象")
+                        return []
+                    
                     results = self.object_collection.query(
                         query_texts=["*"],  # 通用查询
-                        n_results=min(candidate_k, self.object_collection.count()),
+                        n_results=n_results,
                         include=['metadatas', 'documents', 'distances', 'embeddings']
                     )
                     
@@ -711,6 +752,7 @@ class VectorMemory:
                             'center': json.loads(metadata['center']),
                             'type': metadata['type'],
                             'object_id': metadata['object_id'],
+                            'hash': metadata.get('hash', ''),
                             'distance': distance,
                             'similarity': similarity,
                             'embedding': embedding
@@ -721,14 +763,14 @@ class VectorMemory:
             
             # 为所有候选对象计算完整的文本和图像相似度
             query_text_embedding = None
-            query_image_embedding = None
+            # query_image_embedding = None
             
             # 准备查询嵌入
             if 'content' in query_obj and query_obj['content']:
                 query_text_embedding = self.encode_text(query_obj['content'])
             
-            if 'image' in query_obj and query_obj['image'] is not None:
-                query_image_embedding = self.encode_image(query_obj['image'])
+            # if 'image' in query_obj and query_obj['image'] is not None:
+            #     query_image_embedding = self.encode_image(query_obj['image'])
             
             # 为每个候选对象计算相似度
             for obj_id, candidate in all_candidates.items():
@@ -747,17 +789,32 @@ class VectorMemory:
                     except Exception as e:
                         self.logger.debug(f"计算文本相似度失败: {e}")
                 
-                # 计算图像相似度
-                if query_image_embedding is not None and candidate.get('embedding') is not None:
+                # 计算图像相似度 - 使用hash比较
+                if 'hash' in query_obj and query_obj['hash'] and 'hash' in candidate and candidate['hash']:
                     try:
-                        candidate_embedding = np.array(candidate['embedding'])
-                        # 计算余弦相似度
-                        image_cosine_sim = np.dot(query_image_embedding, candidate_embedding) / (
-                            np.linalg.norm(query_image_embedding) * np.linalg.norm(candidate_embedding)
-                        )
-                        image_similarity = max(0, (image_cosine_sim + 1) / 2)  # 转换到[0,1]范围
+                        query_hash = query_obj['hash']
+                        candidate_hash = candidate['hash']
+                        
+                        # 如果hash完全相同，相似度为1.0
+                        if query_hash == candidate_hash:
+                            image_similarity = 1.0
+                        else:
+                            # 计算hash的汉明距离相似度
+                            # 将hash转换为二进制字符串进行比较
+                            try:
+                                query_bin = bin(int(query_hash, 16))[2:].zfill(64)  # 转为64位二进制
+                                candidate_bin = bin(int(candidate_hash, 16))[2:].zfill(64)
+                                
+                                # 计算汉明距离
+                                hamming_distance = sum(c1 != c2 for c1, c2 in zip(query_bin, candidate_bin))
+                                # 转换为相似度 (距离越小，相似度越高)
+                                image_similarity = max(0, 1 - hamming_distance / 64.0)
+                            except ValueError:
+                                # 如果hash格式不正确，使用字符串相似度
+                                common_chars = sum(c1 == c2 for c1, c2 in zip(query_hash, candidate_hash))
+                                image_similarity = common_chars / max(len(query_hash), len(candidate_hash))
                     except Exception as e:
-                        self.logger.debug(f"计算图像相似度失败: {e}")
+                        self.logger.debug(f"计算图像hash相似度失败: {e}")
                         image_similarity = 0.0
                 else:
                     image_similarity = 0.0
