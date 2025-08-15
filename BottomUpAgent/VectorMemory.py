@@ -421,7 +421,11 @@ class VectorMemory:
                            text_weight: float = 0.3, image_weight: float = 0.5, 
                            bbox_weight: float = 0.2) -> Tuple[List[Dict], List[Dict]]:
         """
-        对象去重处理，使用混合相似性检测
+        对象去重处理，使用优化的混合相似性检测
+        优化策略：
+        1. 使用更全面的候选对象集合
+        2. 采用多阶段相似性检测
+        3. 针对去重场景调整权重和阈值
         
         Args:
             objects: 待处理的对象列表
@@ -439,24 +443,130 @@ class VectorMemory:
         new_objects = []
         duplicate_objects = []
         
+        # 为每个对象生成hash以提高比较效率
         for obj in objects:
-            # 使用混合查询进行更精确的相似性检测
+            if 'hash' not in obj or not obj['hash']:
+                obj['hash'] = self._generate_object_hash(obj)
+        
+        for i, obj in enumerate(objects):
+            # 首先进行快速hash比较
+            found_duplicate = False
+            
+            # 阶段1a: 在已处理的新对象中查找完全相同的hash（批次内去重）
+            for existing_obj in new_objects:
+                if (obj.get('hash') and existing_obj.get('hash') and 
+                    obj['hash'] == existing_obj['hash']):
+                    duplicate_objects.append({
+                        'original': obj,
+                        'similar': existing_obj,
+                        'similarity': 1.0,
+                        'reason': 'identical_hash_batch'
+                    })
+                    print(f"Duplicate Obj (Hash-Batch): {obj.get('content', 'Unknown')} (Sim: 1.000)")
+                    found_duplicate = True
+                    break
+            
+            if found_duplicate:
+                continue
+                
+            # 阶段1b: 在数据库中查找完全相同的hash（与已存储对象去重）
+            if obj.get('hash'):
+                try:
+                    # 直接使用where条件查找相同hash的对象
+                    hash_results = self.object_collection.get(
+                        where={"hash": obj['hash']},
+                        include=['metadatas', 'documents']
+                    )
+                    
+                    # 如果找到相同hash的对象
+                    if hash_results['ids'] and len(hash_results['ids']) > 0:
+                        # 取第一个匹配的对象
+                        matched_id = hash_results['ids'][0]
+                        matched_metadata = hash_results['metadatas'][0]
+                        matched_content = hash_results['documents'][0]
+                        
+                        duplicate_objects.append({
+                            'original': obj,
+                            'similar': {
+                                'id': matched_id,
+                                'content': matched_content,
+                                'hash': matched_metadata['hash'],
+                                'bbox': json.loads(matched_metadata['bbox']),
+                                'area': matched_metadata['area'],
+                                'center': json.loads(matched_metadata['center']),
+                                'type': matched_metadata['type'],
+                                'object_id': matched_metadata['object_id']
+                            },
+                            'similarity': 1.0,
+                            'reason': 'identical_hash_db'
+                        })
+                        print(f"Duplicate Obj (Hash-DB): {obj.get('content', 'Unknown')} (Sim: 1.000)")
+                        found_duplicate = True
+                        
+                except Exception as e:
+                    self.logger.debug(f"数据库hash查询失败: {e}")
+                    # 如果直接hash查询失败，回退到文本查询+hash比较的方法
+                    try:
+                        hash_results = self.object_collection.query(
+                            query_texts=[obj.get('content', 'unknown')],
+                            n_results=20,  # 获取更多结果以便hash比较
+                            include=['metadatas', 'documents', 'distances']
+                        )
+                        
+                        # 检查返回结果中是否有相同的hash
+                        for j in range(len(hash_results['ids'][0])):
+                            metadata = hash_results['metadatas'][0][j]
+                            stored_hash = metadata.get('hash', '')
+                            
+                            if stored_hash and stored_hash == obj['hash']:
+                                duplicate_objects.append({
+                                    'original': obj,
+                                    'similar': {
+                                        'id': hash_results['ids'][0][j],
+                                        'content': hash_results['documents'][0][j],
+                                        'hash': stored_hash,
+                                        'bbox': json.loads(metadata['bbox']),
+                                        'area': metadata['area'],
+                                        'center': json.loads(metadata['center']),
+                                        'type': metadata['type'],
+                                        'object_id': metadata['object_id']
+                                    },
+                                    'similarity': 1.0,
+                                    'reason': 'identical_hash_db'
+                                })
+                                print(f"Duplicate Obj (Hash-DB): {obj.get('content', 'Unknown')} (Sim: 1.000)")
+                                found_duplicate = True
+                                break
+                    except Exception as e2:
+                        self.logger.debug(f"回退hash查询也失败: {e2}")
+            
+            if found_duplicate:
+                continue
+                
+            # 阶段2: 使用混合查询进行更精确的相似性检测
             similar_objects = self.query_collection_mixed(
                 obj, 
-                top_k=1, 
+                top_k=3,  # 获取前3个最相似的对象进行比较
                 text_weight=text_weight, 
                 image_weight=image_weight, 
                 bbox_weight=bbox_weight
             )
-            __import__('pdb').set_trace
-            if similar_objects and similar_objects[0]['similarity'] >= threshold:
-                # 找到相似对象，标记为重复
-                duplicate_objects.append({
-                    'original': obj,
-                    'similar': similar_objects[0]
-                })
-                print(f"检测到重复对象: {obj.get('content', 'Unknown')[:20]} (相似度: {similar_objects[0]['similarity']:.3f})")
-            else:
+
+            if similar_objects:
+                # 检查是否有超过阈值的相似对象
+                best_match = similar_objects[0]
+                if best_match['similarity'] >= threshold:
+                    # 找到相似对象，标记为重复
+                    duplicate_objects.append({
+                        'original': obj,
+                        'similar': best_match,
+                        'similarity': best_match['similarity'],
+                        'reason': 'mixed_similarity'
+                    })
+                    print(f"Duplicate Obj (Mixed): {obj.get('content', 'Unknown')} (Sim: {best_match['similarity']:.3f})")
+                    found_duplicate = True
+            
+            if not found_duplicate:
                 # 新对象
                 new_objects.append(obj)
         
@@ -684,6 +794,7 @@ class VectorMemory:
                               bbox_weight: float = 0.2, bbox_scale: float = 1000.0) -> List[Dict]:
         """
         混合查询方法，结合文本相似度、图像相似度和bbox位置距离
+        优化版本：获取更全面的候选对象集合，避免遗漏相似对象
         
         Args:
             query_obj: 查询对象，包含 content, cropped_image, bbox 等字段
@@ -701,76 +812,76 @@ class VectorMemory:
             if 'hash' not in query_obj or not query_obj['hash']:
                 query_obj['hash'] = self._generate_object_hash(query_obj)
             
-            # 获取所有候选对象（使用较大的候选数量）
-            candidate_k = max(min(top_k * 5, 200), 50)  # 确保有足够的候选对象用于重排序
+            # 获取数据库中的总对象数量
+            collection_count = self.object_collection.count()
+            if collection_count == 0:
+                self.logger.warning("向量数据库为空，无法获取候选对象")
+                return []
             
-            # 先通过文本或图像查询获取候选对象
+            # 动态调整候选对象数量，确保不遗漏相似对象
+            # 对于去重场景，我们需要更全面的候选集合
+            if top_k == 1:  # 去重场景，获取更多候选对象
+                candidate_k = min(collection_count, max(500, collection_count // 2))
+            else:  # 常规查询场景
+                candidate_k = min(collection_count, max(top_k * 10, 100))
+            
+            # 获取候选对象集合 - 使用多种策略确保覆盖面
             all_candidates = {}
             
-            # 优先使用文本查询获取候选对象
+            # 策略1: 文本查询获取候选对象
             if 'content' in query_obj and query_obj['content']:
                 text_results = self.query_collection_by_text(query_obj['content'], candidate_k)
                 for result in text_results:
                     all_candidates[result['id']] = result
             
-            # 如果文本查询结果不足，补充图像查询结果
-            if len(all_candidates) < candidate_k and 'image' in query_obj and query_obj['image'] is not None:
+            # 策略2: 图像查询获取候选对象（与文本查询并行，不是补充）
+            if 'image' in query_obj and query_obj['image'] is not None:
                 image_results = self.query_collection_by_image(query_obj['image'], candidate_k)
                 for result in image_results:
                     if result['id'] not in all_candidates:
                         all_candidates[result['id']] = result
             
-            # 如果仍然没有候选对象，获取所有对象作为候选
-            if not all_candidates:
-                # 使用一个通用查询获取所有对象
+            # 策略3: 如果候选对象仍然不足，获取所有对象进行全面比较
+            if len(all_candidates) < candidate_k:
                 try:
-                    collection_count = self.object_collection.count()
-                    n_results = max(1, min(candidate_k, collection_count))  # 确保n_results至少为1
-                    
-                    if collection_count == 0:
-                        self.logger.warning("向量数据库为空，无法获取候选对象")
-                        return []
-                    
+                    remaining_needed = candidate_k - len(all_candidates)
                     results = self.object_collection.query(
                         query_texts=["*"],  # 通用查询
-                        n_results=n_results,
+                        n_results=min(remaining_needed, collection_count),
                         include=['metadatas', 'documents', 'distances', 'embeddings']
                     )
                     
                     for i in range(len(results['ids'][0])):
-                        metadata = results['metadatas'][0][i]
-                        doc = results['documents'][0][i]
-                        distance = results['distances'][0][i]
-                        embedding = results['embeddings'][0][i] if results.get('embeddings') else None
-                        similarity = max(0, 1 - distance / 2)
-                        
-                        all_candidates[results['ids'][0][i]] = {
-                            'id': results['ids'][0][i],
-                            'content': doc,
-                            'bbox': json.loads(metadata['bbox']),
-                            'area': metadata['area'],
-                            'center': json.loads(metadata['center']),
-                            'type': metadata['type'],
-                            'object_id': metadata['object_id'],
-                            'hash': metadata.get('hash', ''),
-                            'distance': distance,
-                            'similarity': similarity,
-                            'embedding': embedding
-                        }
+                        obj_id = results['ids'][0][i]
+                        if obj_id not in all_candidates:  # 避免重复
+                            metadata = results['metadatas'][0][i]
+                            doc = results['documents'][0][i]
+                            distance = results['distances'][0][i]
+                            embedding = results['embeddings'][0][i] if results.get('embeddings') else None
+                            similarity = max(0, 1 - distance / 2)
+                            
+                            all_candidates[obj_id] = {
+                                'id': obj_id,
+                                'content': doc,
+                                'bbox': json.loads(metadata['bbox']),
+                                'area': metadata['area'],
+                                'center': json.loads(metadata['center']),
+                                'type': metadata['type'],
+                                'object_id': metadata['object_id'],
+                                'hash': metadata.get('hash', ''),
+                                'distance': distance,
+                                'similarity': similarity,
+                                'embedding': embedding
+                            }
                 except Exception as e:
-                    self.logger.warning(f"获取候选对象失败: {e}")
-                    return []
+                    self.logger.warning(f"获取补充候选对象失败: {e}")
             
             # 为所有候选对象计算完整的文本和图像相似度
             query_text_embedding = None
-            # query_image_embedding = None
             
             # 准备查询嵌入
             if 'content' in query_obj and query_obj['content']:
                 query_text_embedding = self.encode_text(query_obj['content'])
-            
-            # if 'image' in query_obj and query_obj['image'] is not None:
-            #     query_image_embedding = self.encode_image(query_obj['image'])
             
             # 为每个候选对象计算相似度
             for obj_id, candidate in all_candidates.items():
@@ -789,7 +900,7 @@ class VectorMemory:
                     except Exception as e:
                         self.logger.debug(f"计算文本相似度失败: {e}")
                 
-                # 计算图像相似度 - 使用hash比较
+                # 优化的图像相似度计算 - 使用hash比较和更精确的阈值
                 if 'hash' in query_obj and query_obj['hash'] and 'hash' in candidate and candidate['hash']:
                     try:
                         query_hash = query_obj['hash']
@@ -800,15 +911,19 @@ class VectorMemory:
                             image_similarity = 1.0
                         else:
                             # 计算hash的汉明距离相似度
-                            # 将hash转换为二进制字符串进行比较
                             try:
                                 query_bin = bin(int(query_hash, 16))[2:].zfill(64)  # 转为64位二进制
                                 candidate_bin = bin(int(candidate_hash, 16))[2:].zfill(64)
                                 
                                 # 计算汉明距离
                                 hamming_distance = sum(c1 != c2 for c1, c2 in zip(query_bin, candidate_bin))
-                                # 转换为相似度 (距离越小，相似度越高)
-                                image_similarity = max(0, 1 - hamming_distance / 64.0)
+                                # 转换为相似度，使用更敏感的阈值
+                                max_distance = 64.0
+                                # 对于去重场景，我们需要更严格的相似度判断
+                                if hamming_distance <= 8:  # 允许少量差异
+                                    image_similarity = 1.0 - (hamming_distance / max_distance) * 0.5
+                                else:
+                                    image_similarity = max(0, 1 - hamming_distance / max_distance)
                             except ValueError:
                                 # 如果hash格式不正确，使用字符串相似度
                                 common_chars = sum(c1 == c2 for c1, c2 in zip(query_hash, candidate_hash))
