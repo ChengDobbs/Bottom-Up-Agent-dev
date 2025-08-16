@@ -60,6 +60,74 @@ def generate_skill_tools(model_name):
         return None
 
 
+def environment_query_tools(model_name):
+    """Environment query tools for MCP-style interaction"""
+    if model_name == "claude-3-7-sonnet-20250219":
+        return [
+            {
+                "name": "query_environment",
+                "description": "Query current UI environment information to get real-time data about detected objects",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query_type": {
+                            "type": "string",
+                            "enum": ["all_objects", "clickable_objects", "text_content", "specific_object", "object_summary"],
+                            "description": "Type of environment query to perform"
+                        },
+                        "object_id": {
+                            "type": "string",
+                            "description": "Specific object ID to query (required for specific_object query_type)"
+                        }
+                    },
+                    "required": ["query_type"],
+                    "additionalProperties": False
+                }
+            }
+        ]
+    elif model_name == "gpt-4o" or model_name == "o4-mini":
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "query_environment",
+                    "description": "Query current UI environment information to get real-time data about detected objects",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query_type": {
+                                "type": "string",
+                                "enum": ["all_objects", "clickable_objects", "text_content", "specific_object", "object_summary"],
+                                "description": "Type of environment query to perform"
+                            },
+                            "object_id": {
+                                "type": "string",
+                                "description": "Specific object ID to query (required for specific_object query_type)"
+                            }
+                        },
+                        "required": ["query_type"],
+                        "additionalProperties": False
+                    }
+                }
+            }
+        ]
+    else:
+        print(f"Model {model_name} not found")
+        return None
+
+
+def mcp_interaction_tools(model_name):
+    """Combined tools for MCP-style structured interaction"""
+    env_tools = environment_query_tools(model_name)
+    skill_tools = select_skill_tools(model_name)
+    operation_tools = do_operation_tools(model_name)
+    
+    if env_tools and skill_tools and operation_tools:
+        return env_tools + skill_tools + operation_tools
+    else:
+        return None
+
+
 def get_explore_guidance_tools(model_name):
 
     if model_name == "claude-3-7-sonnet-20250219":

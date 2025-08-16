@@ -2,6 +2,8 @@ screenshot.png
 */__pycache__/
 __pycache__
 logs/
+test/
+*/screenshots/
 *.db
 *.sqlite3
 *bin

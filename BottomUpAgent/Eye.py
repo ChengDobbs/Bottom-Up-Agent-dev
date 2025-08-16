@@ -138,9 +138,9 @@ class Eye:
             print(f"Error taking screenshot: {e}")
             return None
 
-    def detect_acted_cv(self, last_screenshot_cv, current_screenshot_cv):
+    def detect_acted_cv(self, last_screenshot_cv, current_screenshot_cv)->float:
         if last_screenshot_cv is None:
-            return True
+            return 1.0
         last_gray = cv2.cvtColor(last_screenshot_cv, cv2.COLOR_RGB2GRAY)
         current_gray = cv2.cvtColor(current_screenshot_cv, cv2.COLOR_RGB2GRAY)
 
@@ -149,6 +149,8 @@ class Eye:
 
         change_ratio = np.sum(diff) / (diff.shape[0] * diff.shape[1] * 255)
         print(f"Change ratio: {change_ratio}")
-        if change_ratio > 0.015:
-            return True
-        return False
+        # TODO: focus near where Click and Touch operation happens, 
+        # should weigh higher for that salient surrounding than others, 
+        # e.g., the button area, the text area, the input area, etc.
+        # i.e., saliency and heatmap method
+        return change_ratio

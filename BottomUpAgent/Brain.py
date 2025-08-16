@@ -27,10 +27,14 @@ class Brain:
 
         self.skill_evaluate_tools = FunctionCalls.skill_evaluate_tools(config['brain']['evaluate_model'])
         self.skill_evaluate2_tools = FunctionCalls.skill_evaluate2_tools(config['brain']['evaluate_model'])
+        
+        # MCP-style interaction tools
+        self.environment_query_tools = FunctionCalls.environment_query_tools(config['brain']['base_model'])
+        self.mcp_interaction_tools = FunctionCalls.mcp_interaction_tools(config['brain']['base_model'])
 
         self.uct_c = config['brain']['uct_c']
         self.uct_threshold = config['brain']['uct_threshold']
-
+        self.max_mcp_iter = config.get('mcp', {}).get('max_iter', 8)
 
     def select_skill_cluster(self, step, ob, skills):
         # select id name description from skills
@@ -246,7 +250,7 @@ class Brain:
 
         print(f"State similarity: {similarity}, threshold: {threshold}")
 
-        return similarity < threshold
+        return similarity < threshold, similarity
     
     def merge_and_save_skills(self, step, state, skill_clusters, new_skills):
         if len(new_skills) == 0:
@@ -274,9 +278,17 @@ class Brain:
     def generate_and_save_skill(self, step, obs, operations, state_id, mcst_node_id):
         operations_str =  ''
         for idx, operation in enumerate(operations):
-            if operation['operate'] == 'Click':
-                cords = f"({operation['params']['x']}, {operation['params']['y']})"
+            if operation['operate'] in ['Click', 'RightSingle', 'LeftDouble']:
+                # Handle both coordinate and x,y formats
+                if 'coordinate' in operation['params']:
+                    x, y = operation['params']['coordinate']
+                else:
+                    x, y = operation['params']['x'], operation['params']['y']
+                cords = f"({x}, {y})"
                 operations_str += 'operation' + str(idx) + ': ' + operation['operate'] + ' ' + cords + '\n'
+            else:
+                # Handle other operation types without coordinates
+                operations_str += 'operation' + str(idx) + ': ' + operation['operate'] + '\n'
         operations[-1].pop('params', None)
         prompt = Prompt.generate_skill_prompt(operations_str)
         imgs_64 = [cv_to_base64(ob['screen']) for ob in obs]
@@ -298,3 +310,254 @@ class Brain:
         else:
             print("No function call!")
             return None
+    
+    def execute_environment_query(self, query_type, detected_objects, object_id=None):
+        """Execute environment query and return formatted results"""
+        if query_type == "all_objects":
+            return self._format_all_objects(detected_objects)
+        elif query_type == "clickable_objects":
+            return self._format_clickable_objects(detected_objects)
+        elif query_type == "text_content":
+            return self._format_text_content(detected_objects)
+        elif query_type == "specific_object" and object_id:
+            return self._format_specific_object(detected_objects, object_id)
+        elif query_type == "object_summary":
+            return self._format_object_summary(detected_objects)
+        else:
+            return "Invalid query type or missing object_id for specific_object query"
+    
+    def _format_all_objects(self, detected_objects):
+        """Format all detected objects information"""
+        if not detected_objects:
+            return "No objects detected in current screen."
+        
+        result = f"Detected {len(detected_objects)} objects:\n"
+        for i, obj in enumerate(detected_objects):
+            result += f"{i+1}. ID: {obj.get('id', 'N/A')}, Type: {obj.get('type', 'unknown')}, "
+            result += f"Center: {obj.get('center', 'N/A')}, Content: '{obj.get('content', '')[:50]}...', "
+            result += f"Interactivity: {obj.get('interactivity', 'unknown')}\n"
+        return result
+    
+    def _format_clickable_objects(self, detected_objects):
+        """Format only clickable objects information"""
+        clickable_objects = [obj for obj in detected_objects 
+                           if obj.get('interactivity') not in ['no_effect', 'unknown'] or 
+                           obj.get('type') in ['button', 'link', 'input', 'clickable']]
+        
+        if not clickable_objects:
+            return "No clearly clickable objects detected."
+        
+        result = f"Found {len(clickable_objects)} potentially clickable objects:\n"
+        for i, obj in enumerate(clickable_objects):
+            result += f"{i+1}. ID: {obj.get('id', 'N/A')}, Type: {obj.get('type', 'unknown')}, "
+            result += f"Center: {obj.get('center', 'N/A')}, Content: '{obj.get('content', '')[:30]}', "
+            result += f"Interactivity: {obj.get('interactivity', 'unknown')}\n"
+        return result
+    
+    def _format_text_content(self, detected_objects):
+        """Format text content from detected objects"""
+        text_objects = [obj for obj in detected_objects if obj.get('content') and obj.get('content').strip()]
+        
+        if not text_objects:
+            return "No text content detected."
+        
+        result = f"Text content from {len(text_objects)} objects:\n"
+        for i, obj in enumerate(text_objects):
+            content = obj.get('content', '').strip()
+            if content:
+                result += f"{i+1}. '{content}' (Type: {obj.get('type', 'unknown')}, Center: {obj.get('center', 'N/A')})\n"
+        return result
+    
+    def _format_specific_object(self, detected_objects, object_id):
+        """Format specific object information"""
+        target_obj = None
+        for obj in detected_objects:
+            if str(obj.get('id')) == str(object_id):
+                target_obj = obj
+                break
+        
+        if not target_obj:
+            return f"Object with ID '{object_id}' not found."
+        
+        result = f"Object ID {object_id} details:\n"
+        result += f"- Type: {target_obj.get('type', 'unknown')}\n"
+        result += f"- Content: '{target_obj.get('content', '')}'\n"
+        result += f"- Center coordinates: {target_obj.get('center', 'N/A')}\n"
+        result += f"- Bounding box: {target_obj.get('bbox', 'N/A')}\n"
+        result += f"- Area: {target_obj.get('area', 'N/A')}\n"
+        result += f"- Interactivity: {target_obj.get('interactivity', 'unknown')}\n"
+        return result
+    
+    def _format_object_summary(self, detected_objects):
+        """Format a summary of detected objects"""
+        if not detected_objects:
+            return "No objects detected."
+        
+        # Count by type
+        type_counts = {}
+        interactivity_counts = {}
+        total_text_chars = 0
+        
+        for obj in detected_objects:
+            obj_type = obj.get('type', 'unknown')
+            interactivity = obj.get('interactivity', 'unknown')
+            content = obj.get('content', '')
+            
+            type_counts[obj_type] = type_counts.get(obj_type, 0) + 1
+            interactivity_counts[interactivity] = interactivity_counts.get(interactivity, 0) + 1
+            total_text_chars += len(content)
+        
+        result = f"Screen Summary: {len(detected_objects)} total objects\n"
+        result += f"Types: {dict(type_counts)}\n"
+        result += f"Interactivity: {dict(interactivity_counts)}\n"
+        result += f"Total text characters: {total_text_chars}\n"
+        return result
+    
+    def do_operation_mcp(self, step, task, state, detected_objects, pre_knowledge=None, max_iterations=None):
+        """MCP-style operation with multi-turn interaction"""
+        # Get max_iterations from config if not provided
+        if max_iterations is None:
+            max_iterations = self.max_mcp_iter
+        
+        conversation_context = []
+        
+        for iteration in range(max_iterations):
+            print(f"MCP Iteration {iteration + 1}/{max_iterations}")
+            
+            # Update prompt with current iteration context
+            current_prompt = self._build_mcp_prompt(task, conversation_context, iteration, max_iterations)
+            
+            # Call LLM with MCP tools
+            imgs_64 = [cv_to_base64(state['screen'])]
+            response = self.base_model.call_text_images(
+                current_prompt, 
+                imgs_64, 
+                self.mcp_interaction_tools, 
+                pre_knowledge=pre_knowledge
+            )
+            
+            print(f"MCP Response: {response}")
+            
+            self.logger.log({
+                f"eval/tokens/mcp_iteration_{iteration+1}/input": response['usage']['input'],
+                f"eval/tokens/mcp_iteration_{iteration+1}/output": response['usage']['output'],
+                f"eval/tokens/mcp_iteration_{iteration+1}/total": response['usage']['total']
+            }, step)
+            
+            if response['function'] is None:
+                print("No function call in MCP response")
+                return None
+            
+            function_name = response['function']['name']
+            function_input = response['function']['input']
+            
+            if function_name == 'query_environment':
+                # Execute environment query
+                query_result = self.execute_environment_query(
+                    function_input['query_type'],
+                    detected_objects,
+                    function_input.get('object_id')
+                )
+                
+                # Add to conversation context
+                conversation_context.append({
+                    'iteration': iteration + 1,
+                    'query': function_input,
+                    'result': query_result
+                })
+                
+                # Continue to next iteration (prompt will be updated in the loop)
+                continue
+                
+            elif function_name == 'select_skill':
+                # Execute skill selection
+                print(f"MCP selected skill ID: {function_input['id']}")
+                return {
+                    "action_type": "select_skill",
+                    "skill_id": int(function_input['id']),
+                    "conversation_context": conversation_context
+                }
+                
+            elif function_name in ['Click', 'RightSingle', 'LeftDouble', 'Type', 'Drag', 'Finished']:
+                # Execute direct operation
+                print(f"MCP selected operation: {function_name}")
+                return {
+                    "action_type": "direct_operation",
+                    "operate": function_name,
+                    "params": function_input,
+                    "conversation_context": conversation_context
+                }
+            
+            else:
+                print(f"Unknown function: {function_name}")
+                return None
+        
+        print("MCP max iterations reached without final decision")
+        # Fallback to intelligent random exploration from detected objects
+        print("Falling back to random exploration from detected objects")
+        
+        # Get clickable objects for random selection
+        clickable_objects = [obj for obj in detected_objects if obj.get('interactivity') == 'clickable']
+        
+        # If no clickable objects, use all objects
+        if not clickable_objects:
+            clickable_objects = detected_objects
+        
+        if clickable_objects:
+            # Randomly select an object
+            selected_obj = random.choice(clickable_objects)
+            
+            # Randomly select an operation type
+            operations = ['Click', 'RightSingle', 'LeftDouble']
+            selected_operation = random.choice(operations)
+            
+            print(f"Random exploration: {selected_operation} on object {selected_obj.get('id', 'unknown')} at {selected_obj['center']}")
+            
+            return {
+                "action_type": "direct_operation",
+                "operate": selected_operation,
+                "params": {"coordinate": selected_obj['center']},
+                "conversation_context": conversation_context,
+                "fallback_decision": True,
+                "selected_object": selected_obj
+            }
+        else:
+            # Ultimate fallback if no objects detected
+            print("No objects detected, using center screen click as last resort")
+            return {
+                "action_type": "direct_operation",
+                "operate": "Click",
+                "params": {"coordinate": [640, 360]},
+                "conversation_context": conversation_context,
+                "fallback_decision": True,
+                "fallback_reason": "no_objects_detected"
+            }
+    
+    def _build_mcp_prompt(self, task, conversation_context, iteration_count, max_iterations):
+        """Build MCP interaction prompt with conversation context and dynamic tool discovery"""
+        num_queries = len(conversation_context)
+        remaining_iterations = max_iterations - iteration_count
+        # TODO: cold start every calling, 
+        # should reflect&retrospect the histories,
+        # should summarize the previous (father node) states.
+        base_prompt = f"""You are an intelligent agent playing a game and your task is: '{task}'.
+
+You have access to various tools that you can discover and use as needed. The available tools will be provided to you through the function calling interface.
+
+Approach:
+- Explore the available tools and use them strategically to understand the environment
+- Learn from past experiences through skill-related tools when applicable
+- Take direct actions when you have sufficient information and confidence
+- You have {remaining_iterations} iterations remaining to complete this task
+- Do not hesitate to make your final desicion before falling back to naive brute-force random search
+- Be efficient but thorough in your decision-making process
+
+Analyze the current situation and choose the most appropriate tool to help you progress toward completing the task.
+"""
+        
+        if conversation_context:
+            base_prompt += "\n\nPrevious interactions in this session:\n"
+            for ctx in conversation_context:
+                base_prompt += f"Iteration {ctx['iteration']}: {ctx['query']} -> {ctx['result'][:200]}...\n"
+        
+        return base_prompt

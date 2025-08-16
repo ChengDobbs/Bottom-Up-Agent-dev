@@ -43,12 +43,15 @@ class LongMemory:
 
         cursor.execute("CREATE TABLE IF NOT EXISTS states (id INTEGER PRIMARY KEY, state_feature BLOB, mcts TEXT, object_ids TEXT, skill_clusters TEXT)")
 
-        cursor.execute("CREATE TABLE IF NOT EXISTS objects (id INTEGER PRIMARY KEY, content TEXT , image BLOB, hash BLOB, area INTEGER, vector_id TEXT, bbox TEXT, center TEXT)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS objects (id INTEGER PRIMARY KEY, content TEXT , image BLOB, hash BLOB, area INTEGER, vector_id TEXT, bbox TEXT, center TEXT, interactivity TEXT DEFAULT 'unknown')")
 
         cursor.execute("CREATE TABLE IF NOT EXISTS skills (id INTEGER PRIMARY KEY, name TEXT, description TEXT, operations TEXT, " \
         "fitness REAL, num INTEGER, state_id INTEGER, mcts_node_id INTEGER, image1 BLOB, image2 BLOB)")
 
         cursor.execute("CREATE TABLE IF NOT EXISTS skill_clusters (id INTEGER PRIMARY KEY, state_feature BLOB, name TEXT, description TEXT, members TEXT, explore_nums INTEGER)")
+        
+        # 创建对象交互历史记录表
+        cursor.execute("CREATE TABLE IF NOT EXISTS object_interactions (id INTEGER PRIMARY KEY, object_id INTEGER, operation_type TEXT, interactivity TEXT, screen_change_ratio REAL, state_changed INTEGER, timestamp REAL, FOREIGN KEY(object_id) REFERENCES objects(id))")
 
         self.longmemory.commit()
 
@@ -58,11 +61,11 @@ class LongMemory:
     def get_object_by_ids(self, ids):
         objects = []
         cursor = self.longmemory.cursor()
-        cursor.execute('SELECT id, content, image, hash, area, vector_id, bbox, center FROM objects WHERE id IN ({})'.format(','.join('?'*len(ids))), ids)
+        cursor.execute('SELECT id, content, image, hash, area, vector_id, bbox, center, interactivity FROM objects WHERE id IN ({})'.format(','.join('?'*len(ids))), ids)
         records = cursor.fetchall()
 
         for record in records:
-            id, content, image_blob, hash_blob, area, vector_id, bbox_str, center_str = record
+            id, content, image_blob, hash_blob, area, vector_id, bbox_str, center_str, interactivity = record
             image = cv2.imdecode(np.frombuffer(image_blob, np.uint8), cv2.IMREAD_COLOR)
             hash = pickle.loads(hash_blob)
             
@@ -78,7 +81,8 @@ class LongMemory:
                 "area": area,
                 "vector_id": vector_id,
                 "bbox": bbox,
-                "center": center
+                "center": center,
+                "interactivity": interactivity or 'unknown'
             })
 
         return objects
@@ -112,7 +116,7 @@ class LongMemory:
                 hash_blob = pickle.dumps(obj['hash'])
                 
                 cursor.execute(
-                    "INSERT INTO objects (content, image, hash, area, vector_id, bbox, center) VALUES (?, ?, ?, ?, ?, ?, ?)", 
+                    "INSERT INTO objects (content, image, hash, area, vector_id, bbox, center, interactivity) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", 
                     (
                         obj['content'], 
                         image_blob, 
@@ -120,7 +124,8 @@ class LongMemory:
                         obj['area'],
                         obj.get('vector_id', ''),
                         json.dumps(obj['bbox']),
-                        json.dumps(obj['center'])
+                        json.dumps(obj['center']),
+                        obj.get('interactivity', 'unknown')
                     )
                 )
                 obj['id'] = cursor.lastrowid
@@ -153,6 +158,161 @@ class LongMemory:
         image_blob = record[0]
         image = cv2.imdecode(np.frombuffer(image_blob, np.uint8), cv2.IMREAD_COLOR)
         return image
+    
+    def record_object_interaction(self, object_id: int, operation_type: str, interactivity: str, screen_change_ratio: float, state_changed: bool):
+        """
+        记录对象交互历史
+        
+        Args:
+            object_id: 对象ID
+            operation_type: 操作类型 ('Click', 'Touch')
+            interactivity: 交互性类型
+            screen_change_ratio: 屏幕变化比例
+            state_changed: 是否发生状态变化
+        """
+        import time
+        cursor = self.longmemory.cursor()
+        cursor.execute(
+            "INSERT INTO object_interactions (object_id, operation_type, interactivity, screen_change_ratio, state_changed, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+            (object_id, operation_type, interactivity, screen_change_ratio, int(state_changed), time.time())
+        )
+        self.longmemory.commit()
+        print(f"Recorded interaction: Object {object_id}, {operation_type} -> {interactivity}")
+    
+    def get_object_interaction_patterns(self, object_id: int):
+        """
+        获取对象的交互模式
+        
+        Args:
+            object_id: 对象ID
+            
+        Returns:
+            dict: 包含不同操作类型的交互模式
+        """
+        cursor = self.longmemory.cursor()
+        cursor.execute(
+            "SELECT operation_type, interactivity, COUNT(*) as count FROM object_interactions WHERE object_id = ? GROUP BY operation_type, interactivity ORDER BY count DESC",
+            (object_id,)
+        )
+        records = cursor.fetchall()
+        
+        patterns = {'Click': {}, 'Touch': {}}
+        for operation_type, interactivity, count in records:
+            if operation_type in patterns:
+                patterns[operation_type][interactivity] = count
+        
+        return patterns
+    
+    def update_object_interactivity(self, object_id: int, operation_type: str, interactivity: str, screen_change_ratio: float, state_changed: bool):
+        """
+        智能更新对象的交互性属性
+        
+        Args:
+            object_id: 对象ID
+            operation_type: 操作类型 ('Click', 'Touch')
+            interactivity: 当前交互性类型
+            screen_change_ratio: 屏幕变化比例
+            state_changed: 是否发生状态变化
+        """
+        # 记录交互历史
+        self.record_object_interaction(object_id, operation_type, interactivity, screen_change_ratio, state_changed)
+        
+        # 获取交互模式
+        patterns = self.get_object_interaction_patterns(object_id)
+        
+        # 智能判断对象的综合交互性
+        comprehensive_interactivity = self._determine_comprehensive_interactivity(patterns)
+        
+        # 更新对象的交互性属性
+        cursor = self.longmemory.cursor()
+        cursor.execute("UPDATE objects SET interactivity = ? WHERE id = ?", (comprehensive_interactivity, object_id))
+        self.longmemory.commit()
+        print(f"Updated object {object_id} comprehensive interactivity to: {comprehensive_interactivity}")
+    
+    def _determine_comprehensive_interactivity(self, patterns: dict) -> str:
+        """
+        根据交互模式确定综合交互性
+        
+        Args:
+            patterns: 交互模式字典
+            
+        Returns:
+            str: 综合交互性类型
+        """
+        click_patterns = patterns.get('Click', {})
+        touch_patterns = patterns.get('Touch', {})
+        
+        # 如果没有交互记录，返回unknown
+        if not click_patterns and not touch_patterns:
+            return 'unknown'
+        
+        # 优先级：window_change > popup > no_effect
+        priority_order = ['click_window_change', 'touch_popup', 'click_popup', 'no_effect']
+        
+        # 收集所有交互类型
+        all_interactions = list(click_patterns.keys()) + list(touch_patterns.keys())
+        
+        # 按优先级返回最高级别的交互类型
+        for interaction_type in priority_order:
+            if interaction_type in all_interactions:
+                return interaction_type
+        
+        return 'unknown'
+    
+    def get_object_interaction_capabilities(self, object_id: int) -> dict:
+        """
+        获取对象的交互能力详情
+        
+        Args:
+            object_id: 对象ID
+            
+        Returns:
+            dict: 包含对象各种操作类型的交互能力
+        """
+        patterns = self.get_object_interaction_patterns(object_id)
+        
+        capabilities = {
+            'can_click': bool(patterns.get('Click', {})),
+            'can_touch': bool(patterns.get('Touch', {})),
+            'click_effects': list(patterns.get('Click', {}).keys()),
+            'touch_effects': list(patterns.get('Touch', {}).keys()),
+            'most_common_click_effect': max(patterns.get('Click', {}).items(), key=lambda x: x[1])[0] if patterns.get('Click') else None,
+            'most_common_touch_effect': max(patterns.get('Touch', {}).items(), key=lambda x: x[1])[0] if patterns.get('Touch') else None,
+            'interaction_count': sum(sum(effects.values()) for effects in patterns.values())
+        }
+        
+        return capabilities
+    
+    def recommend_operation_for_object(self, object_id: int, desired_effect: str = None) -> str:
+        """
+        为对象推荐最佳操作类型
+        
+        Args:
+            object_id: 对象ID
+            desired_effect: 期望的效果类型 (可选)
+            
+        Returns:
+            str: 推荐的操作类型 ('Click' 或 'Touch')
+        """
+        patterns = self.get_object_interaction_patterns(object_id)
+        
+        if desired_effect:
+            # 如果指定了期望效果，优先推荐能产生该效果的操作
+            for operation_type, effects in patterns.items():
+                if desired_effect in effects:
+                    return operation_type
+        
+        # 否则推荐交互次数最多的操作类型
+        click_count = sum(patterns.get('Click', {}).values())
+        touch_count = sum(patterns.get('Touch', {}).values())
+        
+        if click_count > touch_count:
+            return 'Click'
+        elif touch_count > click_count:
+            return 'Touch'
+        else:
+            # 如果相等，默认推荐Click
+            return 'Click'
     
     """   States   """
     def save_state(self, state):

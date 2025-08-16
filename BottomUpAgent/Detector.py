@@ -132,12 +132,23 @@ class Detector:
                 'area': area,
                 'hash': hash_val,
                 'center': (center_x, center_y),
-                'image': cropped
+                'image': cropped,
+                'interactivity': 'unknown'
             }
             # print(object_meta)
             objects.append(object_meta)
 
         return objects
+    
+    def get_detected_objects(self, image: np.ndarray) -> List[Dict]:
+        """Get detected objects from image - unified interface for MCP mode"""
+        if self.detector_type == 'sam':
+            return self.extract_objects_sam(image)
+        elif self.detector_type == 'omni':
+            return self.extract_objects_omni(image)
+        else:
+            print(f"Unknown detector type: {self.detector_type}")
+            return []
 
     def extract_objects_omni(self, image: np.ndarray, get_parsed_img = False) -> List[Dict]:
         height, width = image.shape[:2]
@@ -202,7 +213,8 @@ class Detector:
                 'hash': hash_val,
                 'type': obj_type,
                 'center': (center_x, center_y),
-                'image': cropped
+                'image': cropped,
+                'interactivity': 'unknown'  # 初始化为未知状态
             }
             # print(object_meta)
             objects.append(object_meta)

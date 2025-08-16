@@ -14,13 +14,19 @@ class Hand:
         pyautogui.moveTo(x, y, duration)
 
     def left_single_click(self, x, y):
+        """Perform a left mouse click at the specified coordinates."""
         pyautogui.moveTo(x, y, duration=0.05)
-        pyautogui.mouseDown()
-        pyautogui.mouseUp()
+        time.sleep(0.05)  # Ensure mouse reaches position
+        pyautogui.mouseDown(button='left')
+        time.sleep(0.05)  # Ensure click is registered
+        pyautogui.mouseUp(button='left')
 
     def right_single_click(self, x, y):
+        """Perform a right mouse click at the specified coordinates."""
         pyautogui.moveTo(x, y, duration=0.05)
+        time.sleep(0.05)  # Ensure mouse reaches position
         pyautogui.mouseDown(button='right')
+        time.sleep(0.05)  # Ensure click is registered
         pyautogui.mouseUp(button='right')
 
 
@@ -47,8 +53,14 @@ class Hand:
             y1 = params["y1"] + top
             x2 = params["x2"] + left
             y2 = params["y2"] + top
-            pyautogui.moveTo(x1, y1, duration=0.5)
-            pyautogui.dragTo(x2, y2, duration=1)
+            # Move to start position
+            pyautogui.moveTo(x1, y1, duration=0.05)
+            time.sleep(0.1)  # Ensure mouse reaches position
+            pyautogui.mouseDown(button='left')
+            time.sleep(0.05)  # Ensure click is registered
+            pyautogui.moveTo(x2, y2, duration=0.2)
+            # Release left mouse button
+            pyautogui.mouseUp(button='left')
             print(f"Dragged from ({x1}, {y1}) to ({x2}, {y2})")
             
         elif operate == "Scroll":
@@ -94,13 +106,14 @@ class Hand:
             print(f"Right clicked at ({x}, {y})")
             
         elif operate == "LongPress":
+            # TODO: higher requests need to specify duration
             x = params["x"] + left
             y = params["y"] + top
             pyautogui.moveTo(x, y, duration=0.5)
-            pyautogui.mouseDown()
+            pyautogui.mouseDown(button='left')  # Specify left button
             time.sleep(1)  # Long press duration
-            pyautogui.mouseUp()
-            print(f"Long pressed at ({x}, {y})")
+            pyautogui.mouseUp(button='left')  # Specify left button
+            print(f"Long pressed at ({x}, {y}) for 1 second")
             
         elif operate == "PressBack":
             pyautogui.press('backspace')
