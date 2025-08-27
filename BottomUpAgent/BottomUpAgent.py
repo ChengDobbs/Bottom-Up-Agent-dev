@@ -51,6 +51,18 @@ class BottomUpAgent:
         self.exec_duration = config['exec_duration'] if 'exec_duration' in config else 0.8
 
         self.suspended_skill_cluster_ids = []
+        
+        # Add state tracking for intelligent reset
+        self.last_reset_step = -1
+        self.current_turn_detected = False
+        self.game_over_detected = False
+        
+        # Context management for hint information
+        self.context_manager = {
+            'current_hint': None,
+            'hint_history': [],
+            'max_hint_history': 5  # Keep last 5 hints for context
+        }
 
         print(f"GameAgent initialized")
         print(f"game_name: {self.game_name}")
@@ -58,11 +70,52 @@ class BottomUpAgent:
         print(f"Base mode: {'Enabled' if self.is_base else 'Disabled'}")
         print(f"Exec duration: {self.exec_duration}s")
 
-    def get_observation(self):
+    def get_observation(self, include_hint=None):
         screen = self.eye.get_screenshot_cv()
         state_feature = self.detector.encode_image(screen)
-        return {"state_feature": state_feature, "screen": screen}
+        observation = {"state_feature": state_feature, "screen": screen}
+        
+        # Add hint information if provided
+        if include_hint:
+            observation["hint"] = include_hint
+            
+        return observation
     
+    def store_hint(self, hint_info):
+        """Store hint information in context manager"""
+        if hint_info:
+            self.context_manager['current_hint'] = hint_info
+            self.context_manager['hint_history'].append({
+                'hint': hint_info,
+                'timestamp': time.time()
+            })
+            
+            # Keep only the most recent hints
+            if len(self.context_manager['hint_history']) > self.context_manager['max_hint_history']:
+                self.context_manager['hint_history'].pop(0)
+            
+            print(f"Stored hint: {hint_info}")
+    
+    def get_current_hint(self):
+        """Get the current hint information"""
+        return self.context_manager.get('current_hint')
+    
+    def get_hint_context(self):
+        """Get hint context for MCP decision making"""
+        context = []
+        if self.context_manager['current_hint']:
+            context.append(f"Current hint: {self.context_manager['current_hint']}")
+        
+        if self.context_manager['hint_history']:
+            recent_hints = self.context_manager['hint_history'][-3:]  # Last 3 hints
+            for i, hint_entry in enumerate(recent_hints):
+                context.append(f"Previous hint {i+1}: {hint_entry['hint']}")
+        
+        return "\n".join(context) if context else None
+    
+    def clear_current_hint(self):
+        """Clear current hint after successful action"""
+        self.context_manager['current_hint'] = None
     
     def get_potential_operations(self, existed_objects):
         # use for train action
@@ -76,98 +129,120 @@ class BottomUpAgent:
                 continue
         return operations
     
+    def _ground_object_to_coordinates(self, operation, state):
+        """Ground object_id to screen coordinates using image matching."""
+        # Check if object_id is None or 'None'
+        if operation['object_id'] is None or operation['object_id'] == 'None':
+            print(f"Operation grounding failed: object_id is None for operation {operation}")
+            return None
+            
+        object_img = self.brain.long_memory.get_object_image_by_id(operation['object_id'])
+        if object_img is None:
+            print(f"Operation grounding failed: No image found for object_id {operation['object_id']}")
+            return None
+            
+        grounding_result, score = image_grounding_v3(state['screen'], object_img)
+        if grounding_result:
+            operation['params'] = {'x': grounding_result[0], 'y': grounding_result[1]}
+            return grounding_result[0], grounding_result[1]
+        else:
+            print(f"Operation grounding failed: {operation['object_id']} score: {score}")
+            return None
+    
+    def _extract_coordinates_from_params(self, params):
+        """Extract x, y coordinates from params, handling both coordinate and x,y formats."""
+        if 'coordinate' in params:
+            return params['coordinate']
+        else:
+            return params['x'], params['y']
+    
+    def _process_coordinate_based_operation(self, operation, state, operation_method):
+        """Process operations that require x, y coordinates (Click, RightSingle, LeftDouble)."""
+        if 'params' not in operation:
+            # Need to ground object_id to coordinates
+            coordinates = self._ground_object_to_coordinates(operation, state)
+            if coordinates is None:
+                return None
+            x, y = coordinates
+        else:
+            # Extract coordinates from existing params
+            x, y = self._extract_coordinates_from_params(operation['params'])
+        
+        return operation_method(x, y)
+    
+    def _process_drag_operation(self, operation):
+        """Process Drag operation which requires x1, y1, x2, y2 coordinates."""
+        if 'params' not in operation:
+            print(f"Operation grounding failed: Drag operation requires params but none provided: {operation}")
+            return None
+        
+        params = operation['params']
+        if all(key in params for key in ['x1', 'y1', 'x2', 'y2']):
+            x1, y1, x2, y2 = params['x1'], params['y1'], params['x2'], params['y2']
+            return UnifiedOperation.Drag(x1, y1, x2, y2)
+        else:
+            print(f"Operation grounding failed: Drag operation missing required coordinates (x1, y1, x2, y2): {params}")
+            return None
+    
+    def _process_direct_operation(self, operation, operation_method):
+        """Process operations that don't require coordinates (Type, Wait, etc.)."""
+        if 'params' in operation:
+            params = operation['params']
+            # Handle different parameter formats for different operations
+            if 'text' in params:  # Type operation
+                return operation_method(params['text'])
+            elif 'duration' in params:  # Wait operation
+                return operation_method(params['duration'])
+            elif 'keys' in params:  # Hotkey operation
+                return operation_method(params['keys'])
+            elif 'direction' in params and 'clicks' in params:  # Scroll operation
+                return operation_method(params['direction'], params['clicks'])
+            else:
+                # For operations without specific params, call with no arguments
+                return operation_method()
+        else:
+            return operation_method()
+    
     def operate_grounding(self, operation, state):
+        """Ground operation to UnifiedOperation object based on operation type."""
         operate_type = operation['operate']
         
-        if operate_type == 'Click':
-            if 'params' not in operation:
-                # Check if object_id is None or 'None'
-                if operation['object_id'] is None or operation['object_id'] == 'None':
-                    print(f"Operation grounding failed: object_id is None for operation {operation}")
-                    return None
-                    
-                object_img = self.brain.long_memory.get_object_image_by_id(operation['object_id'])
-                if object_img is None:
-                    print(f"Operation grounding failed: No image found for object_id {operation['object_id']}")
-                    return None
-                    
-                grounding_result, score = image_grounding_v3(state['screen'], object_img)
-                if grounding_result:
-                    operation_ = UnifiedOperation.Click(grounding_result[0], grounding_result[1])
-                    operation['params'] = {'x': grounding_result[0], 'y': grounding_result[1]}
-                    return operation_
-                else:
-                    print(f"Operation grounding failed: {operation['object_id']} score: {score}")
-                    return None
-            else:
-                # Handle both coordinate and x,y formats
-                if 'coordinate' in operation['params']:
-                    x, y = operation['params']['coordinate']
-                else:
-                    x, y = operation['params']['x'], operation['params']['y']
-                operation_ = UnifiedOperation.Click(x, y)
-                return operation_
-                
-        elif operate_type == 'RightSingle':
-            if 'params' not in operation:
-                # Check if object_id is None or 'None'
-                if operation['object_id'] is None or operation['object_id'] == 'None':
-                    print(f"Operation grounding failed: object_id is None for operation {operation}")
-                    return None
-                    
-                object_img = self.brain.long_memory.get_object_image_by_id(operation['object_id'])
-                if object_img is None:
-                    print(f"Operation grounding failed: No image found for object_id {operation['object_id']}")
-                    return None
-                    
-                grounding_result, score = image_grounding_v3(state['screen'], object_img)
-                if grounding_result:
-                    operation_ = UnifiedOperation.RightSingle(grounding_result[0], grounding_result[1])
-                    operation['params'] = {'x': grounding_result[0], 'y': grounding_result[1]}
-                    return operation_
-                else:
-                    print(f"Operation grounding failed: {operation['object_id']} score: {score}")
-                    return None
-            else:
-                # Handle both coordinate and x,y formats
-                if 'coordinate' in operation['params']:
-                    x, y = operation['params']['coordinate']
-                else:
-                    x, y = operation['params']['x'], operation['params']['y']
-                operation_ = UnifiedOperation.RightSingle(x, y)
-                return operation_
-                
-        elif operate_type == 'LeftDouble':
-            if 'params' not in operation:
-                # Check if object_id is None or 'None'
-                if operation['object_id'] is None or operation['object_id'] == 'None':
-                    print(f"Operation grounding failed: object_id is None for operation {operation}")
-                    return None
-                    
-                object_img = self.brain.long_memory.get_object_image_by_id(operation['object_id'])
-                if object_img is None:
-                    print(f"Operation grounding failed: No image found for object_id {operation['object_id']}")
-                    return None
-                    
-                grounding_result, score = image_grounding_v3(state['screen'], object_img)
-                if grounding_result:
-                    operation_ = UnifiedOperation.LeftDouble(grounding_result[0], grounding_result[1])
-                    operation['params'] = {'x': grounding_result[0], 'y': grounding_result[1]}
-                    return operation_
-                else:
-                    print(f"Operation grounding failed: {operation['object_id']} score: {score}")
-                    return None
-            else:
-                # Handle both coordinate and x,y formats
-                if 'coordinate' in operation['params']:
-                    x, y = operation['params']['coordinate']
-                else:
-                    x, y = operation['params']['x'], operation['params']['y']
-                operation_ = UnifiedOperation.LeftDouble(x, y)
-                return operation_
-            
+        # Define operation mappings for coordinate-based operations
+        coordinate_operations = {
+            'Click': UnifiedOperation.Click,
+            'RightSingle': UnifiedOperation.RightSingle,
+            'LeftDouble': UnifiedOperation.LeftDouble
+        }
+        
+        # Define operation mappings for direct operations (no coordinates needed)
+        direct_operations = {
+            'Type': UnifiedOperation.Type,
+            'Wait': UnifiedOperation.Wait,
+            'Finished': UnifiedOperation.Finished,
+            'CallUser': UnifiedOperation.CallUser,
+            'Hotkey': UnifiedOperation.Hotkey,
+            'Scroll': UnifiedOperation.Scroll,
+            'LongPress': UnifiedOperation.LongPress,
+            'PressBack': UnifiedOperation.PressBack,
+            'PressHome': UnifiedOperation.PressHome,
+            'PressEnter': UnifiedOperation.PressEnter
+        }
+        
+        # Handle coordinate-based operations
+        if operate_type in coordinate_operations:
+            return self._process_coordinate_based_operation(operation, state, coordinate_operations[operate_type])
+        
+        # Handle Drag operation (special case with 4 coordinates)
+        elif operate_type == 'Drag':
+            return self._process_drag_operation(operation)
+        
+        # Handle direct operations
+        elif operate_type in direct_operations:
+            return self._process_direct_operation(operation, direct_operations[operate_type])
+        
+        # Unsupported operation
         else:
-            print(f"Unsupported operate: {operation['operate']}")
+            print(f"Unsupported operate: {operate_type}")
             return None
 
 
@@ -254,7 +329,7 @@ class BottomUpAgent:
         Returns:
             tuple: (new_skill, is_state_changed) or (None, False) if failed
         """
-        self.state_reset()
+        self.state_reset(step)
         
         obs = [self.get_observation()]
         operations = node.operations.copy()
@@ -285,41 +360,51 @@ class BottomUpAgent:
         使用MCP模式智能选择操作
         
         Args:
-            candidate_operations: 候选操作列表
-            step: 当前步骤
-            obs: 观察历史
-            operations: 现有操作列表
+            candidate_operations: candidate operations
+            step: current step
+            obs: observation history
+            operations: curren operation list
             
         Returns:
-            选择的操作
+            selected operations
         """
         # Use MCP mode for intelligent operation selection
         print(f"Using MCP mode for operation selection from {len(candidate_operations)} candidates")
         
-        # Convert candidate operations to detected objects format for MCP
-        # Create pseudo-detected objects from candidate operations
-        pseudo_detected_objects = []
-        for op in candidate_operations:
-            if 'object_id' in op and op['object_id'] != 'None':
-                # Get object info from long memory
-                obj_infos = self.brain.long_memory.get_object_by_ids([op['object_id']])
-                if obj_infos and len(obj_infos) > 0:
-                    pseudo_detected_objects.append(obj_infos[0])
+        # Get comprehensive detected objects context (similar to exploit_mcp)
+        # Get historical objects from recent states for comprehensive context
+        historical_objects = []
+        try:
+            # Get objects from the current state's object_ids if available
+            current_state = obs[-1].get('state', {})
+            if 'object_ids' in current_state and current_state['object_ids']:
+                # Get more historical objects for richer MCP context
+                historical_objects = self.brain.long_memory.get_object_by_ids(current_state['object_ids'][-50:])
+                print(f"Retrieved {len(historical_objects)} historical objects from state")
+                
+            # Also try to get recent objects from long memory if state doesn't have enough
+            if len(historical_objects) < 30:
+                try:
+                    recent_objects = self.brain.long_memory.get_recent_objects(limit=50)
+                    if recent_objects:
+                        # Merge with existing historical objects, avoiding duplicates
+                        existing_ids = {obj.get('id') for obj in historical_objects if obj.get('id')}
+                        for obj in recent_objects:
+                            if obj.get('id') and obj['id'] not in existing_ids:
+                                historical_objects.append(obj)
+                        print(f"Added {len(recent_objects)} recent objects, total historical: {len(historical_objects)}")
+                except Exception as e2:
+                    print(f"Could not retrieve recent objects: {e2}")
+        except Exception as e:
+            print(f"Could not retrieve historical objects: {e}")
         
-        # If no valid objects found, create minimal objects from operations
-        if not pseudo_detected_objects:
-            for i, op in enumerate(candidate_operations):
-                pseudo_detected_objects.append({
-                    'id': op.get('object_id', f'temp_{i}'),
-                    'center': (op.get('params', {}).get('x', 0), op.get('params', {}).get('y', 0)),
-                    'content': f"Operation target at {op.get('params', {})}",
-                    'type': 'clickable',
-                    'interactivity': 'clickable'
-                })
+        # Use comprehensive object detection that includes both new and historical objects
+        detected_objects = self.detector.get_detected_objects_with_context(obs[-1]['screen'], historical_objects)
+        print(f"Detected {len(detected_objects)} objects for MCP operation selection (including historical context)")
         
-        task_context = f"Exploring new operations from node with {len(operations)} existing operations. Choose the best operation to continue exploration."
+        task_context = f"Exploring new operations from node with {len(operations)} existing operations. Choose the best operation to continue exploration from {len(candidate_operations)} candidates."
         mcp_result = self.brain.do_operation_mcp(
-            step, task_context, obs[-1], pseudo_detected_objects
+            step, task_context, obs[-1], detected_objects
         )
         
         if mcp_result and mcp_result.get('action_type') == 'direct_operation':
@@ -407,6 +492,12 @@ class BottomUpAgent:
         print(f"select_operation: {select_operation}")
         existed_children_operations.append(select_operation)
         operation_ = self.operate_grounding(select_operation, obs[-1])
+        
+        # Check if operation grounding was successful
+        if operation_ is None:
+            print(f"Operation grounding failed for {select_operation}, skipping execution")
+            node.is_fixed = True
+            return None, False
 
         operated_object_id = select_operation.get('object_id')
         self.hand.do_operation(operation_, self.eye.left, self.eye.top)
@@ -509,7 +600,7 @@ class BottomUpAgent:
         # Generate new skill based on screen changes
         if self._is_significant_screen_change(screen_change_ratio):
             new_skill = self.brain.generate_and_save_skill(
-                step, obs, operations, state['id'], new_mcts_node.node_id
+                step, obs, operations, state['id'], new_mcts_node.node_id, self
             )
 
             if self.brain.detect_state_changed(obs[0], obs[-1])[0]:
@@ -572,7 +663,7 @@ class BottomUpAgent:
     
     def exploit(self, step, task, skill):
         print(f"begin exploit with COMMON mode")
-        self.state_reset()
+        self.state_reset(step)
         obs = [self.get_observation()]
         print(f"selected skill id: {skill['id']} name: {skill['name']} description: {skill['description']} \
                    fitness: {skill['fitness']} num: {skill['num']} operations: {skill['operations']}")
@@ -593,7 +684,7 @@ class BottomUpAgent:
             print("wait for operations to finish......")
             time.sleep(self.exec_duration)
         obs.append(self.get_observation())
-        exec_chain.append({'screen': f'data:image/png;base64,{cv_to_base64(obs[-1]["screen"])}'})
+        exec_chain.append({'screen': f'data:image/png;base64,{cv_to_base64(obs[-1]["screen"])}'}) 
         push_data({'exec_chain': exec_chain})
         
         if not self.eye.detect_acted_cv(obs[-2]['screen'], obs[-1]['screen']):
@@ -601,6 +692,63 @@ class BottomUpAgent:
             self.logger.log({"eval/skill_acted": 0}, step)
             push_data({'result': 'not acted'})
             return 'Fail'
+
+        # Generate skill from MCP-selected operation if screen changed significantly
+        if len(operations) > 0:
+            # Detect screen changes and generate skill if significant
+            screen_change_result = self._detect_screen_changes_and_update_interactivity(
+                obs, operations[-1], operated_object_id=operations[-1].get('object_id')
+            )
+            screen_change_ratio = screen_change_result['screen_change_ratio']
+            
+            if self._is_significant_screen_change(screen_change_ratio):
+                print(f"Significant screen change detected (ratio: {screen_change_ratio:.3f}), generating skill")
+                # Create a temporary state and node for skill generation
+                temp_state = {'id': f'mcp_temp_{step}'}
+                temp_node_id = f'mcp_node_{step}'
+                
+                new_skill = self.brain.generate_and_save_skill(
+                    step, obs, operations, temp_state['id'], temp_node_id, self
+                )
+                
+                if new_skill:
+                    print(f"Successfully generated skill from MCP operation: {new_skill.get('name', 'Unknown')}")
+                    
+                    # Check if the skill is incomplete and needs continuation
+                    if new_skill.get('incomplete', False):
+                        print(f"Incomplete skill detected: {new_skill['name']}")
+                        print(f"Next action hint: {new_skill['next_action_hint']}")
+                        
+                        # Continue with MCP for follow-up actions
+                        print("Triggering MCP continuation for incomplete skill...")
+                        try:
+                            # Get current observation and detected objects for MCP continuation
+                            current_obs = self.get_observation()
+                            detected_objects = self.detector.detect(current_obs['screen'])
+                            
+                            # Call MCP with context about the incomplete operation
+                            continuation_result = self.brain.do_operation_mcp(
+                                step + 0.5,  # Use fractional step to indicate continuation
+                                task + f" (Continue: {new_skill['next_action_hint']})",
+                                {'screen': current_obs['screen']},
+                                detected_objects,
+                                pre_knowledge=f"Previous incomplete action: {new_skill['description']}. Next: {new_skill['next_action_hint']}",
+                                max_iterations=2  # Limit iterations for continuation
+                            )
+                            
+                            if continuation_result and continuation_result.get('success'):
+                                print(f"MCP continuation successful: {continuation_result.get('operation', 'Unknown')}")
+                                # Update the incomplete skill to complete if successful
+                                self.brain.long_memory.update_skill(new_skill['id'], 1, 1)  # Mark as successful
+                            else:
+                                print("MCP continuation failed or no follow-up action taken")
+                                
+                        except Exception as e:
+                            print(f"Error during MCP continuation: {e}")
+                else:
+                    print("Failed to generate skill from MCP operation")
+            else:
+                print(f"Screen change not significant (ratio: {screen_change_ratio:.3f}), skipping skill generation")
 
         # skill_evaluate
         if not self.close_evaluate:
@@ -646,7 +794,7 @@ class BottomUpAgent:
     def exploit_mcp(self, step, task, skill):
         """Enhanced exploit method with MCP support for operation selection"""
         print(f"begin exploit with MCP mode:")
-        self.state_reset()
+        self.state_reset(step)
         obs = [self.get_observation()]
         print(f"selected skill id: {skill['id']} name: {skill['name']} description: {skill['description']} \
                    fitness: {skill['fitness']} num: {skill['num']} operations: {skill['operations']}")
@@ -657,13 +805,46 @@ class BottomUpAgent:
         # If MCP mode is enabled and skill has no operations, use MCP for operation selection
         if not operations or len(operations) == 0:
             print("Using MCP for operation selection")
-            detected_objects = self.detector.get_detected_objects(obs[0]['screen'])
-            print(f"Detected {len(detected_objects)} objects for MCP mode")
+            # Get historical objects from recent states for comprehensive context
+            historical_objects = []
+            try:
+                # Get objects from the current state's object_ids if available
+                current_state = obs[0].get('state', {})
+                if 'object_ids' in current_state and current_state['object_ids']:
+                    # Get more historical objects for richer MCP context (increased from 20 to 50)
+                    historical_objects = self.brain.long_memory.get_object_by_ids(current_state['object_ids'][-50:])
+                    print(f"Retrieved {len(historical_objects)} historical objects from state")
+                
+                # Also try to get recent objects from long memory if state doesn't have enough
+                if len(historical_objects) < 30:
+                    try:
+                        recent_objects = self.brain.long_memory.get_recent_objects(limit=50)
+                        if recent_objects:
+                            # Merge with existing historical objects, avoiding duplicates
+                            existing_ids = {obj.get('id') for obj in historical_objects if obj.get('id')}
+                            for obj in recent_objects:
+                                if obj.get('id') and obj['id'] not in existing_ids:
+                                    historical_objects.append(obj)
+                            print(f"Added {len(recent_objects)} recent objects, total historical: {len(historical_objects)}")
+                    except Exception as e2:
+                        print(f"Could not retrieve recent objects: {e2}")
+            except Exception as e:
+                print(f"Could not retrieve historical objects: {e}")
+            
+            # Use comprehensive object detection that includes both new and historical objects
+            detected_objects = self.detector.get_detected_objects_with_context(obs[0]['screen'], historical_objects)
+            print(f"Detected {len(detected_objects)} objects for MCP mode (including historical context)")
+            
+            # Get hint context for MCP decision making
+            hint_context = self.get_hint_context()
+            pre_knowledge = get_pre_knowledge(self.game_name)
+            if hint_context:
+                pre_knowledge += f"\n\nHint Context:\n{hint_context}"
             
             # Use MCP-style interaction for operation selection
             mcp_result = self.brain.do_operation_mcp(
                 step, task, obs[0], detected_objects, 
-                get_pre_knowledge(self.game_name)
+                pre_knowledge
             )
             
             if mcp_result is None:
@@ -754,7 +935,7 @@ class BottomUpAgent:
         
     @deprecated
     def run_step_base(self, step, task):
-        self.state_reset()
+        self.state_reset(step)
         self.logger.log({"decision": 1, "decision_text": "Exploit"}, step)
         push_data({'step': step, 'decision': 'Exploit'})
         states = [self.get_state()]
@@ -892,13 +1073,136 @@ class BottomUpAgent:
             time.sleep(0.1)  # Small delay between steps
             step += 1
     
-    def state_reset(self):
+    def state_reset(self, step=None, force_reset=False):
+        """Universal state reset that adapts to any application scenario
+        
+        Args:
+            step: Current step number (optional)
+            force_reset: Force reset regardless of conditions
+        """
         if self.close_reset:
             return
-        if self.game_name== 'Slay the Spire':
+            
+        # Force reset if explicitly requested
+        if force_reset:
+            self._perform_reset()
+            if step is not None:
+                self.last_reset_step = step
+            return
+            
+        # Skip reset if no step provided (backward compatibility)
+        if step is None:
+            return
+            
+        # Skip reset if we just reset in the same step
+        if step == self.last_reset_step:
+            print(f"Skipping reset - already reset in step {step}")
+            return
+            
+        # Universal reset condition check
+        if self._should_reset_universal(step):
+            print(f"Performing intelligent reset for step {step}")
+            self._perform_reset()
+            self.last_reset_step = step
+        else:
+            print(f"Skipping reset for step {step} - not needed")
+                
+    def _should_reset_universal(self, step):
+        """Universal reset condition check that adapts to any application scenario"""
+        try:
+            # Get current screen to analyze state
+            current_screen = self.eye.get_screenshot_cv()
+            
+            # Use detector to get text content and UI elements
+            detected_objects = self.detector.get_detected_objects(current_screen)
+            
+            # Extract text content from detected objects
+            text_content = []
+            for obj in detected_objects:
+                content = obj.get('content', '').lower().strip()
+                if content:
+                    text_content.append(content)
+            
+            all_text = ' '.join(text_content).lower()
+            
+            # Universal reset conditions based on common UI patterns:
+            
+            # 1. State transition indicators (common across applications)
+            state_transition_keywords = [
+                "restart", "reset", "start over", "begin", "new", "continue", 
+                "next", "proceed", "finish", "complete", "done", "end",
+                "menu", "home", "back", "return", "exit", "close"
+            ]
+            
+            # 2. Error or completion indicators
+            completion_keywords = [
+                "error", "failed", "success", "completed", "finished", 
+                "victory", "defeat", "game over", "task complete", "mission accomplished"
+            ]
+            
+            # 3. Navigation or mode change indicators
+            navigation_keywords = [
+                "loading", "please wait", "processing", "connecting", 
+                "login", "logout", "sign in", "sign out", "switch", "change"
+            ]
+            
+            # Check for state transitions that typically require reset
+            if any(keyword in all_text for keyword in state_transition_keywords):
+                if step - self.last_reset_step > 3:  # Avoid too frequent resets
+                    print(f"Reset condition: State transition detected - {step - self.last_reset_step} steps since last reset")
+                    return True
+            
+            # Check for completion or error states
+            if any(keyword in all_text for keyword in completion_keywords):
+                print("Reset condition: Completion/error state detected")
+                return True
+            
+            # Check for navigation changes
+            if any(keyword in all_text for keyword in navigation_keywords):
+                if step - self.last_reset_step > 5:  # Less frequent for navigation
+                    print(f"Reset condition: Navigation change detected - {step - self.last_reset_step} steps since last reset")
+                    return True
+            
+            # Safety mechanism: reset after extended period without reset
+            max_steps_without_reset = getattr(self, 'max_steps_without_reset', 25)
+            if step - self.last_reset_step > max_steps_without_reset:
+                print(f"Reset condition: Safety reset after {step - self.last_reset_step} steps")
+                return True
+            
+            # Screen change based reset (if significant visual changes detected)
+            if hasattr(self, 'last_screen_state'):
+                # This could be enhanced with actual screen comparison logic
+                # For now, we rely on text-based detection
+                pass
+                
+            return False
+            
+        except Exception as e:
+            print(f"Error in universal reset condition check: {e}")
+            # Fallback to reset on error to maintain system stability
+            return True
+            
+    def _perform_reset(self):
+        """Universal reset operation that adapts to any application scenario"""
+        try:
+            # Universal reset approach: right-click at a safe position
+            # This works for most applications as it often brings up context menus
+            # or cancels current operations
             x = self.eye.left + 50
             y = self.eye.top + 50   
             self.hand.right_single_click(x, y)
-            print("wait for operations to finish......")
-
-            time.sleep(0.2)
+            
+            # Allow time for the reset operation to complete
+            reset_wait_time = getattr(self, 'reset_wait_time', 0.2)
+            print(f"Performing universal reset operation, waiting {reset_wait_time}s...")
+            time.sleep(reset_wait_time)
+            
+            # Clear any application-specific state flags
+            if hasattr(self, 'game_over_detected'):
+                self.game_over_detected = False
+            if hasattr(self, 'current_turn_detected'):
+                self.current_turn_detected = False
+                
+        except Exception as e:
+            print(f"Error performing reset operation: {e}")
+            # Even if reset fails, we should continue to avoid getting stuck

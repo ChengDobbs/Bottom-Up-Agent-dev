@@ -1,5 +1,3 @@
-# 向量数据库 + MCP模式配置
-# 结合向量数据库和MCP (Multi-Component Processing) 功能
 project_name: 'SuperGamer'
 game_name: 'Slay the Spire'
 run_name: 'claude - vector - mcp - test1'

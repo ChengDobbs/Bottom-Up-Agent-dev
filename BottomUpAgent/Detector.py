@@ -118,7 +118,7 @@ class Detector:
                     break
 
                 hash_dist = self._hamming_distance(prev_object['hash'], hash_val)
-                if hash_dist <= 5:  
+                if hash_dist <= 8:  
                     is_duplicate = True
                     break
 
@@ -149,6 +149,54 @@ class Detector:
         else:
             print(f"Unknown detector type: {self.detector_type}")
             return []
+    
+    def get_detected_objects_with_context(self, image: np.ndarray, historical_objects: List[Dict] = None) -> List[Dict]:
+        """Get detected objects including both new and historical objects for comprehensive MCP context"""
+        # Get newly detected objects
+        new_objects = self.get_detected_objects(image)
+        
+        if not historical_objects:
+            return new_objects
+        
+        # Create a comprehensive object list that includes both new and relevant historical objects
+        comprehensive_objects = []
+        
+        # Add all new objects
+        for obj in new_objects:
+            comprehensive_objects.append(obj)
+        
+        # Add ALL historical objects to provide comprehensive context for MCP
+        # Even if they match with new objects, they provide valuable historical context
+        for hist_obj in historical_objects:
+            hist_center = hist_obj.get('center', (0, 0))
+            matched_new_obj = None
+            
+            # Check if this historical object matches any new object
+            for new_obj in new_objects:
+                new_center = new_obj.get('center', (0, 0))
+                # Use position-based matching
+                if (abs(hist_center[0] - new_center[0]) <= 10 and 
+                    abs(hist_center[1] - new_center[1]) <= 10):
+                    matched_new_obj = new_obj
+                    break
+                
+                # Use hash-based matching if available
+                if (hist_obj.get('hash') and new_obj.get('hash') and 
+                    self._hamming_distance(hist_obj['hash'], new_obj['hash']) <= 8):
+                    matched_new_obj = new_obj
+                    break
+            
+            # Always add historical objects, but mark their relationship to new objects
+            hist_obj_copy = hist_obj.copy()
+            if matched_new_obj:
+                hist_obj_copy['source'] = 'historical_matched'
+                hist_obj_copy['matched_new_id'] = matched_new_obj.get('id')
+            else:
+                hist_obj_copy['source'] = 'historical_unique'
+            comprehensive_objects.append(hist_obj_copy)
+        
+        print(f"Comprehensive objects: {len(new_objects)} new + {len(comprehensive_objects) - len(new_objects)} historical = {len(comprehensive_objects)} total")
+        return comprehensive_objects
 
     def extract_objects_omni(self, image: np.ndarray, get_parsed_img = False) -> List[Dict]:
         height, width = image.shape[:2]

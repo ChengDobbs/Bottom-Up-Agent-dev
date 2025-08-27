@@ -86,23 +86,46 @@ class LongMemory:
             })
 
         return objects
-    
-    def update_objects(self, state, objects, text_weight=0.3, image_weight=0.5, bbox_weight=0.2, bbox_scale=1000.0):
-        """
-        更新对象到长期记忆中
+
+    def get_recent_objects(self, limit=50):
+        """Get recent objects from the database for MCP context"""
+        cursor = self.longmemory.cursor()
+        cursor.execute('''
+            SELECT id, content, image, hash, area, vector_id, bbox, center, interactivity 
+            FROM objects 
+            ORDER BY id DESC 
+            LIMIT ?
+        ''', (limit,))
+        records = cursor.fetchall()
         
-        Args:
-            state: 当前状态
-            objects: 对象列表
-            text_weight: 文本相似度权重
-            image_weight: 图像相似度权重
-            bbox_weight: 位置相似度权重
-            bbox_scale: 位置距离缩放因子
-        """
+        objects = []
+        for record in records:
+            id, content, image_blob, hash_blob, area, vector_id, bbox_str, center_str, interactivity = record
+            image = cv2.imdecode(np.frombuffer(image_blob, np.uint8), cv2.IMREAD_COLOR)
+            hash = pickle.loads(hash_blob)
+            
+            bbox = json.loads(bbox_str) if bbox_str else []
+            center = json.loads(center_str) if center_str else [0, 0]
+            
+            objects.append({
+                "id": id, 
+                "content": content, 
+                "image": image, 
+                "hash": hash, 
+                "area": area,
+                "vector_id": vector_id,
+                "bbox": bbox,
+                "center": center,
+                "interactivity": interactivity or 'unknown'
+            })
+        
+        return objects
+
+    def update_objects(self, state, objects, text_weight=0.3, image_weight=0.5, bbox_weight=0.2, bbox_scale=1000.0):
         cursor = self.longmemory.cursor()
         updated_objects_nums = 0
         
-        # 使用向量数据库进行智能去重和存储（使用mixed方式）
+        # Use VecDB to deduplicate and store objs (mixed)
         processed_objects = self.vector_memory.update_object_with_vector_storage(
             objects, text_weight=text_weight, image_weight=image_weight, 
             bbox_weight=bbox_weight, similarity_threshold=0.85
@@ -132,7 +155,7 @@ class LongMemory:
                 state['object_ids'].append(obj['id'])
                 updated_objects_nums += 1
                 
-                print(f"新对象存储: ID={obj['id']}, Content='{obj['content'][:20]}...', Vector_ID={obj.get('vector_id', 'N/A')}")
+                print(f"Stored new object: ID={obj['id']}, Content='{obj['content'][:20]}...', Vector_ID={obj.get('vector_id', 'N/A')}")
             else:
                 # 已存在的对象，可能需要更新向量ID
                 if 'vector_id' in obj:

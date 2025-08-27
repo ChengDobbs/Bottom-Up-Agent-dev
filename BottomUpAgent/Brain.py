@@ -14,8 +14,10 @@ class Brain:
     def __init__(self, config, detector, logger):
         self.game_name = config['game_name']
         self.model_name = config['brain']['base_model']
-        self.base_model = creat_base_model(config['brain']['base_model'])
-        self.evaluate_model = creat_base_model(config['brain']['evaluate_model'])
+        # Set timeout for API calls to prevent hanging
+        api_timeout = config.get('api_timeout', 60)
+        self.base_model = creat_base_model(config['brain']['base_model'], timeout=api_timeout)
+        self.evaluate_model = creat_base_model(config['brain']['evaluate_model'], timeout=api_timeout)
         self.long_memory = LongMemory(config)
         self.logger = logger
 
@@ -275,7 +277,7 @@ class Brain:
                             exist_cluter['members'].append(id)
                     self.long_memory.update_skill_cluster(cluster['id'], state['state_feature'], cluster['name'], cluster['description'], exist_cluter['members'])
 
-    def generate_and_save_skill(self, step, obs, operations, state_id, mcst_node_id):
+    def generate_and_save_skill(self, step, obs, operations, state_id, mcst_node_id, agent=None):
         operations_str =  ''
         for idx, operation in enumerate(operations):
             if operation['operate'] in ['Click', 'RightSingle', 'LeftDouble']:
@@ -304,6 +306,34 @@ class Brain:
                                             operations, 0, 1, state_id, mcst_node_id, obs[0]['screen'], obs[-1]['screen'])
                 print(f"save skill: {response['function']['input']['name']}, operations: {operations_str}, fitness: {0}")
                 return {"id": id, "name": response['function']['input']['name'], "description": response['function']['input']['description']}
+            elif response['function']['name'] == "incomplete_skill":
+                # Handle incomplete skill - save as temporary skill and signal for MCP continuation
+                print(f"incomplete skill detected: {response['function']['input']['name']}")
+                print(f"description: {response['function']['input']['description']}")
+                print(f"next action hint: {response['function']['input']['next_action_hint']}")
+                
+                # Store hint information in agent's context manager if agent is provided
+                if agent is not None:
+                    agent.store_hint(response['function']['input']['next_action_hint'])
+                
+                # Save as temporary incomplete skill with special fitness marker
+                id = self.long_memory.save_skill(
+                    response['function']['input']['name'], 
+                    response['function']['input']['description'], 
+                    operations, -1, 0, state_id, mcst_node_id, 
+                    obs[0]['screen'], obs[-1]['screen']
+                )
+                
+                return {
+                    "id": id, 
+                    "name": response['function']['input']['name'], 
+                    "description": response['function']['input']['description'],
+                    "incomplete": True,
+                    "next_action_hint": response['function']['input']['next_action_hint']
+                }
+            elif response['function']['name'] == "no_meaning_skill":
+                print("no meaning skill detected")
+                return None
             else:
                 print("Unknown function: "+response['function']['name'])
                 return None
@@ -312,17 +342,19 @@ class Brain:
             return None
     
     def execute_environment_query(self, query_type, detected_objects, object_id=None):
-        """Execute environment query and return formatted results"""
+        """Execute enhanced environment query with game-specific intelligence"""
         if query_type == "all_objects":
-            return self._format_all_objects(detected_objects)
+            return self._format_all_objects_enhanced(detected_objects)
         elif query_type == "clickable_objects":
-            return self._format_clickable_objects(detected_objects)
+            return self._format_clickable_objects_enhanced(detected_objects)
         elif query_type == "text_content":
-            return self._format_text_content(detected_objects)
+            return self._format_text_content_enhanced(detected_objects)
         elif query_type == "specific_object" and object_id:
             return self._format_specific_object(detected_objects, object_id)
         elif query_type == "object_summary":
-            return self._format_object_summary(detected_objects)
+            return self._format_object_summary_enhanced(detected_objects)
+        elif query_type == "game_state":
+            return self._analyze_game_state(detected_objects)
         else:
             return "Invalid query type or missing object_id for specific_object query"
     
@@ -336,6 +368,307 @@ class Brain:
             result += f"{i+1}. ID: {obj.get('id', 'N/A')}, Type: {obj.get('type', 'unknown')}, "
             result += f"Center: {obj.get('center', 'N/A')}, Content: '{obj.get('content', '')[:50]}...', "
             result += f"Interactivity: {obj.get('interactivity', 'unknown')}\n"
+        return result
+    
+    def _format_all_objects_enhanced(self, detected_objects):
+        """Enhanced all objects formatting with intelligent categorization"""
+        if not detected_objects:
+            return "No objects detected in current screen."
+        
+        # Categorize objects by likely function
+        cards = []
+        buttons = []
+        ui_elements = []
+        text_info = []
+        
+        for obj in detected_objects:
+            content = obj.get('content', '').strip()
+            obj_type = obj.get('type', 'unknown')
+            center = obj.get('center', [0, 0])
+            
+            # Categorize based on content and position
+            if any(keyword in content.lower() for keyword in ['attack', 'defend', 'block', 'energy', 'damage']):
+                cards.append(obj)
+            elif any(keyword in content.lower() for keyword in ['end', 'turn', 'skip', 'confirm', 'cancel']):
+                buttons.append(obj)
+            elif content and len(content) > 0:
+                if content.isdigit() or '/' in content:
+                    text_info.append(obj)
+                else:
+                    ui_elements.append(obj)
+            else:
+                ui_elements.append(obj)
+        
+        result = f"🎮 ENHANCED OBJECT ANALYSIS ({len(detected_objects)} total):\n\n"
+        
+        if cards:
+            result += f"🃏 CARDS/ACTIONS ({len(cards)}): "
+            for card in cards:
+                result += f"[{card.get('content', '')[:20]} @{card.get('center')}] "
+            result += "\n\n"
+        
+        if buttons:
+            result += f"🔘 BUTTONS ({len(buttons)}): "
+            for btn in buttons:
+                result += f"[{btn.get('content', '')[:15]} @{btn.get('center')}] "
+            result += "\n\n"
+        
+        if text_info:
+            result += f"📊 INFO/STATS ({len(text_info)}): "
+            for info in text_info:
+                result += f"[{info.get('content', '')[:10]} @{info.get('center')}] "
+            result += "\n\n"
+        
+        if ui_elements:
+            result += f"🔧 UI ELEMENTS ({len(ui_elements)}): "
+            for elem in ui_elements[:3]:  # Limit to first 3
+                result += f"[ID:{elem.get('id')} @{elem.get('center')}] "
+            if len(ui_elements) > 3:
+                result += f"... +{len(ui_elements)-3} more"
+            result += "\n\n"
+        
+        result += "💡 RECOMMENDATION: Focus on cards/actions for gameplay, buttons for navigation."
+        return result
+    
+    def _format_clickable_objects_enhanced(self, detected_objects):
+        """Enhanced clickable objects with action priority"""
+        # More intelligent clickable detection
+        clickable_objects = []
+        for obj in detected_objects:
+            interactivity = obj.get('interactivity', 'unknown')
+            content = obj.get('content', '').strip()
+            obj_type = obj.get('type', 'unknown')
+            
+            # Enhanced clickable detection logic
+            is_clickable = (
+                interactivity in ['clickable', 'button'] or
+                obj_type in ['button', 'link', 'input', 'clickable'] or
+                any(keyword in content.lower() for keyword in ['end', 'turn', 'play', 'use', 'confirm', 'cancel']) or
+                (content and len(content) > 0 and interactivity != 'no_effect')
+            )
+            
+            if is_clickable:
+                clickable_objects.append(obj)
+        
+        if not clickable_objects:
+            return "❌ No clearly clickable objects detected. Consider exploring with general click or checking all objects."
+        
+        # Prioritize by likely importance
+        high_priority = []
+        medium_priority = []
+        low_priority = []
+        
+        for obj in clickable_objects:
+            content = obj.get('content', '').lower()
+            if any(keyword in content for keyword in ['end', 'turn', 'play', 'attack', 'defend']):
+                high_priority.append(obj)
+            elif any(keyword in content for keyword in ['confirm', 'cancel', 'skip']):
+                medium_priority.append(obj)
+            else:
+                low_priority.append(obj)
+        
+        result = f"🎯 CLICKABLE OBJECTS ANALYSIS ({len(clickable_objects)} found):\n\n"
+        
+        if high_priority:
+            result += "🔥 HIGH PRIORITY (Game Actions):\n"
+            for obj in high_priority:
+                result += f"  • '{obj.get('content', '')[:30]}' @{obj.get('center')} (ID:{obj.get('id')})\n"
+            result += "\n"
+        
+        if medium_priority:
+            result += "⚡ MEDIUM PRIORITY (UI Controls):\n"
+            for obj in medium_priority:
+                result += f"  • '{obj.get('content', '')[:30]}' @{obj.get('center')} (ID:{obj.get('id')})\n"
+            result += "\n"
+        
+        if low_priority:
+            result += "📋 OTHER OPTIONS:\n"
+            for obj in low_priority[:3]:  # Limit to 3
+                result += f"  • '{obj.get('content', '')[:20]}' @{obj.get('center')} (ID:{obj.get('id')})\n"
+            if len(low_priority) > 3:
+                result += f"  ... +{len(low_priority)-3} more options\n"
+        
+        result += "\n💡 SUGGESTION: Start with HIGH PRIORITY actions for game progress."
+        return result
+    
+    def _format_text_content_enhanced(self, detected_objects):
+        """Enhanced text content with semantic analysis"""
+        text_objects = [obj for obj in detected_objects if obj.get('content') and obj.get('content').strip()]
+        
+        if not text_objects:
+            return "No readable text content detected."
+        
+        # Categorize text by type
+        numbers = []
+        game_terms = []
+        ui_text = []
+        
+        for obj in text_objects:
+            content = obj.get('content', '').strip()
+            if content.isdigit() or '/' in content or any(c.isdigit() for c in content):
+                numbers.append(obj)
+            elif any(term in content.lower() for term in ['attack', 'defend', 'energy', 'block', 'damage', 'health']):
+                game_terms.append(obj)
+            else:
+                ui_text.append(obj)
+        
+        result = f"📝 TEXT CONTENT ANALYSIS ({len(text_objects)} items):\n\n"
+        
+        if numbers:
+            result += "🔢 NUMBERS/STATS:\n"
+            for obj in numbers:
+                result += f"  • '{obj.get('content')}' @{obj.get('center')}\n"
+            result += "\n"
+        
+        if game_terms:
+            result += "⚔️ GAME TERMS:\n"
+            for obj in game_terms:
+                result += f"  • '{obj.get('content')}' @{obj.get('center')}\n"
+            result += "\n"
+        
+        if ui_text:
+            result += "🖥️ UI TEXT:\n"
+            for obj in ui_text[:5]:  # Limit to 5
+                result += f"  • '{obj.get('content')[:30]}' @{obj.get('center')}\n"
+            if len(ui_text) > 5:
+                result += f"  ... +{len(ui_text)-5} more\n"
+        
+        return result
+    
+    def _format_object_summary_enhanced(self, detected_objects):
+        """Enhanced object summary with game state insights"""
+        if not detected_objects:
+            return "No objects detected."
+        
+        # Enhanced categorization
+        categories = {
+            'cards': 0,
+            'buttons': 0,
+            'numbers': 0,
+            'text': 0,
+            'unknown': 0
+        }
+        
+        interactivity_counts = {}
+        total_text_chars = 0
+        
+        for obj in detected_objects:
+            content = obj.get('content', '').strip()
+            obj_type = obj.get('type', 'unknown')
+            interactivity = obj.get('interactivity', 'unknown')
+            
+            # Enhanced categorization logic
+            if any(keyword in content.lower() for keyword in ['attack', 'defend', 'block', 'energy', 'damage']):
+                categories['cards'] += 1
+            elif any(keyword in content.lower() for keyword in ['end', 'turn', 'skip', 'confirm', 'cancel']):
+                categories['buttons'] += 1
+            elif content and (content.isdigit() or '/' in content):
+                categories['numbers'] += 1
+            elif content:
+                categories['text'] += 1
+            else:
+                categories['unknown'] += 1
+            
+            interactivity_counts[interactivity] = interactivity_counts.get(interactivity, 0) + 1
+            total_text_chars += len(content)
+        
+        result = f"📊 ENHANCED SCREEN SUMMARY:\n"
+        result += f"Total objects: {len(detected_objects)}\n"
+        result += f"Categories: {dict(categories)}\n"
+        result += f"Interactivity: {dict(interactivity_counts)}\n"
+        result += f"Text density: {total_text_chars} characters\n\n"
+        
+        # Game state insights
+        if categories['cards'] > 0:
+            result += f"🃏 {categories['cards']} card(s)/action(s) available\n"
+        if categories['buttons'] > 0:
+            result += f"🔘 {categories['buttons']} interactive button(s)\n"
+        if categories['numbers'] > 0:
+            result += f"📊 {categories['numbers']} stat(s)/counter(s)\n"
+        
+        # Actionability assessment
+        clickable_count = sum(1 for obj in detected_objects 
+                            if obj.get('interactivity') not in ['no_effect', 'unknown'])
+        
+        if clickable_count > 0:
+            result += f"\n✅ {clickable_count} potentially actionable objects detected"
+        else:
+            result += f"\n⚠️ No clearly actionable objects - may need exploration"
+        
+        return result
+    
+    def _analyze_game_state(self, detected_objects):
+        """Analyze current game state for strategic decision making"""
+        if not detected_objects:
+            return "Cannot analyze game state - no objects detected."
+        
+        analysis = {
+            'phase': 'unknown',
+            'available_actions': [],
+            'resources': {},
+            'threats': [],
+            'opportunities': []
+        }
+        
+        # Analyze objects for game state clues
+        for obj in detected_objects:
+            content = obj.get('content', '').strip().lower()
+            center = obj.get('center', [0, 0])
+            
+            # Detect game phase
+            if 'end turn' in content:
+                analysis['phase'] = 'player_turn'
+            elif 'enemy turn' in content or 'opponent' in content:
+                analysis['phase'] = 'enemy_turn'
+            
+            # Detect available actions
+            if any(action in content for action in ['attack', 'defend', 'play', 'use']):
+                analysis['available_actions'].append({
+                    'action': content[:20],
+                    'position': center,
+                    'id': obj.get('id')
+                })
+            
+            # Detect resources (energy, health, etc.)
+            if '/' in content and any(c.isdigit() for c in content):
+                analysis['resources'][f'resource_{len(analysis["resources"])}'] = content
+            
+            # Detect threats/opportunities
+            if any(threat in content for threat in ['damage', 'attack', 'vulnerable']):
+                analysis['threats'].append(content[:30])
+            elif any(opp in content for opp in ['heal', 'block', 'energy', 'draw']):
+                analysis['opportunities'].append(content[:30])
+        
+        # Generate strategic summary
+        result = f"🎮 GAME STATE ANALYSIS:\n\n"
+        result += f"Phase: {analysis['phase'].upper()}\n"
+        result += f"Available Actions: {len(analysis['available_actions'])}\n"
+        result += f"Resources Detected: {len(analysis['resources'])}\n"
+        result += f"Threats: {len(analysis['threats'])}\n"
+        result += f"Opportunities: {len(analysis['opportunities'])}\n\n"
+        
+        if analysis['available_actions']:
+            result += "⚔️ AVAILABLE ACTIONS:\n"
+            for action in analysis['available_actions'][:3]:
+                result += f"  • {action['action']} @{action['position']} (ID:{action['id']})\n"
+            result += "\n"
+        
+        if analysis['resources']:
+            result += "💎 RESOURCES:\n"
+            for res_name, res_value in analysis['resources'].items():
+                result += f"  • {res_value}\n"
+            result += "\n"
+        
+        # Strategic recommendation
+        if analysis['phase'] == 'player_turn' and analysis['available_actions']:
+            result += "💡 STRATEGIC RECOMMENDATION: It's your turn - consider taking an action!"
+        elif analysis['threats']:
+            result += "⚠️ STRATEGIC RECOMMENDATION: Threats detected - consider defensive actions."
+        elif analysis['opportunities']:
+            result += "✨ STRATEGIC RECOMMENDATION: Opportunities available - consider capitalizing!"
+        else:
+            result += "🤔 STRATEGIC RECOMMENDATION: Analyze available options and make a strategic choice."
+        
         return result
     
     def _format_clickable_objects(self, detected_objects):
@@ -492,9 +825,7 @@ class Brain:
                 print(f"Unknown function: {function_name}")
                 return None
         
-        print("MCP max iterations reached without final decision")
-        # Fallback to intelligent random exploration from detected objects
-        print("Falling back to random exploration from detected objects")
+        print(f"MCP max iterations ({max_iterations}) reached without final decision. Falling back to random exploration.")
         
         # Get clickable objects for random selection
         clickable_objects = [obj for obj in detected_objects if obj.get('interactivity') == 'clickable']
@@ -534,30 +865,103 @@ class Brain:
             }
     
     def _build_mcp_prompt(self, task, conversation_context, iteration_count, max_iterations):
-        """Build MCP interaction prompt with conversation context and dynamic tool discovery"""
-        num_queries = len(conversation_context)
+        """Build enhanced MCP interaction prompt with intelligent context analysis"""
         remaining_iterations = max_iterations - iteration_count
-        # TODO: cold start every calling, 
-        # should reflect&retrospect the histories,
-        # should summarize the previous (father node) states.
-        base_prompt = f"""You are an intelligent agent playing a game and your task is: '{task}'.
-
-You have access to various tools that you can discover and use as needed. The available tools will be provided to you through the function calling interface.
-
-Approach:
-- Explore the available tools and use them strategically to understand the environment
-- Learn from past experiences through skill-related tools when applicable
-- Take direct actions when you have sufficient information and confidence
-- You have {remaining_iterations} iterations remaining to complete this task
-- Do not hesitate to make your final desicion before falling back to naive brute-force random search
-- Be efficient but thorough in your decision-making process
-
-Analyze the current situation and choose the most appropriate tool to help you progress toward completing the task.
-"""
         
+        # Analyze conversation context for intelligent decision making
+        context_analysis = self._analyze_conversation_context(conversation_context)
+        
+        base_prompt = f"""You are an intelligent agent playing '{self.game_name}' and your task is: '{task}'.
+
+🎯 CURRENT SITUATION:
+- Iteration: {iteration_count + 1}/{max_iterations} (⚠️ {remaining_iterations} remaining)
+- Previous queries: {len(conversation_context)}
+{context_analysis['status_summary']}
+
+🔧 AVAILABLE TOOLS:
+1. query_environment - Get real-time UI information (use strategically, avoid repetition)
+2. select_skill - Choose from learned skills when applicable
+3. Direct actions:
+   - Click: Select/activate UI elements, buttons, or single-target actions
+   - Drag: Move cards to targets (enemies/self), drag items between locations
+   - RightSingle, LeftDouble: Alternative click interactions
+   - Type: Input text when needed
+   - Finished: Complete the task
+
+💡 OPERATION GUIDANCE:
+- For CARD GAMES: Use Drag to play cards on specific targets (enemies, self)
+- For UI ELEMENTS: Use Click for buttons, menus, selections
+- PREFER Drag over Click when moving objects to specific destinations
+- Drag is more efficient than Click+Click sequences for card targeting
+
+🧠 DECISION STRATEGY:
+{context_analysis['decision_guidance']}
+
+⚡ EFFICIENCY RULES:
+- AVOID repeating identical queries (especially 'all_objects')
+- If you've seen the same objects multiple times, MAKE A DECISION
+- Use specific queries (clickable_objects, text_content) over general ones
+- With {remaining_iterations} iterations left, prioritize ACTION over exploration
+- Don't hesitate to take direct action when you have sufficient information
+
+Analyze the current situation and choose the most appropriate action to complete the task."""
+        
+        # Add condensed context history if available
         if conversation_context:
-            base_prompt += "\n\nPrevious interactions in this session:\n"
-            for ctx in conversation_context:
-                base_prompt += f"Iteration {ctx['iteration']}: {ctx['query']} -> {ctx['result'][:200]}...\n"
+            base_prompt += "\n\n📋 CONTEXT SUMMARY:\n"
+            base_prompt += context_analysis['context_summary']
         
         return base_prompt
+    
+    def _analyze_conversation_context(self, conversation_context):
+        """Analyze conversation context to provide intelligent guidance"""
+        if not conversation_context:
+            return {
+                'status_summary': '- Fresh start, no previous context',
+                'decision_guidance': 'Start with a strategic environment query to understand available options.',
+                'context_summary': ''
+            }
+        
+        # Analyze query patterns
+        query_types = [ctx['query'].get('query_type', 'unknown') for ctx in conversation_context]
+        query_counts = {}
+        for qt in query_types:
+            query_counts[qt] = query_counts.get(qt, 0) + 1
+        
+        # Detect repetitive behavior
+        repeated_queries = [qt for qt, count in query_counts.items() if count > 2]
+        last_3_queries = query_types[-3:] if len(query_types) >= 3 else query_types
+        
+        # Generate status summary
+        status_summary = f"- Query pattern: {dict(query_counts)}"
+        if repeated_queries:
+            status_summary += f"\n- ⚠️ REPETITIVE: {repeated_queries} (stop repeating!)"
+        
+        # Generate decision guidance
+        decision_guidance = ""
+        if 'all_objects' in repeated_queries:
+            decision_guidance += "🚨 You've queried 'all_objects' multiple times. You know what's on screen - TAKE ACTION!\n"
+        
+        if len(set(last_3_queries)) == 1:
+            decision_guidance += "🚨 Last 3 queries were identical. Break the loop - try a different approach or make a decision!\n"
+        
+        if len(conversation_context) > 4:
+            decision_guidance += "⏰ You've explored enough. Time to make a decision based on available information.\n"
+        
+        if not decision_guidance:
+            decision_guidance = "Continue strategic exploration, but be ready to act when you have enough information."
+        
+        # Generate condensed context summary
+        context_summary = ""
+        unique_results = set()
+        for ctx in conversation_context[-5:]:  # Last 5 interactions only
+            result_key = ctx['result'][:100]  # First 100 chars as key
+            if result_key not in unique_results:
+                unique_results.add(result_key)
+                context_summary += f"• {ctx['query']} → {ctx['result'][:150]}...\n"
+        
+        return {
+            'status_summary': status_summary,
+            'decision_guidance': decision_guidance.strip(),
+            'context_summary': context_summary
+        }

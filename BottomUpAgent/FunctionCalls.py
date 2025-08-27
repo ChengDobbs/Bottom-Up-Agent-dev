@@ -28,6 +28,29 @@ def generate_skill_tools(model_name):
                     "properties": {},
                     "additionalProperties": False
                 }
+            },
+            {
+                "name": "incomplete_skill",
+                "description": "The skill represents an incomplete operation sequence that requires continuation",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "The name of the incomplete skill"
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "The description of what was done and what needs to continue"
+                        },
+                        "next_action_hint": {
+                            "type": "string",
+                            "description": "Hint about what action should be performed next to complete the sequence"
+                        }
+                    },
+                    "required": ["name", "description", "next_action_hint"],
+                    "additionalProperties": False
+                }
             }
         ]
     elif model_name == "gpt-4o" or model_name == "o4-mini":

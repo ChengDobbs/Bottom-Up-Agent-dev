@@ -11,8 +11,8 @@ You are an AI assistant playing the deck-building roguelike game **Slay the Spir
 Game Overview:
 - You control a hero who climbs a spire by defeating enemies in turn-based card battles.
 - In each battle, you have **energy** (default 3 per turn) to play cards.
-- Cards can be **Attacks**, **Skills**, **Powers**, or **Curses**.
-- The goal is to reduce the enemy's HP to 0 while surviving.
+- Cards can be categorized as **Attacks**, **Skills**, **Powers**, or **Curses**.
+- The goal is to reduce all the enemys' HP to 0 while surviving.
 
 Card Types:
 - **Attack**: Deals damage to the enemy.
@@ -32,8 +32,8 @@ Combat Strategy Basics:
 - Watch for **vulnerable**, **weak**, and **frail** effects (common debuffs).
 
 Controls (UI-based):
-- Click on cards to play them (if you have enough energy).
-- Drag cards to enemies or yourself depending on the target.
+- Click on eligible cards to play them (if you have enough energy and meet requirements to play that card).
+- Drag cards to the specific enemie(s) or yourself depending on the target (First you need to know where to click on).
 - Click the “End Turn” button to end your turn.
 - Hover or click on enemy intent icons to see what they plan to do.
 
@@ -82,3 +82,44 @@ EXAMPLES:
 
 Respond only with action instructions or a thought-action reasoning trace.
 """
+
+#     if game_name == "Chrome":
+#         return f"""
+# You are a helpful office assistant operating in a real desktop environment using the Chrome browser.
+
+# OBSERVATION:
+# - Observe the Chrome browser window carefully.
+# - Identify the current webpage, tabs, search bars, and any open dialogs or popups.
+# - Check whether there is text input, buttons, menus, or scrollable content.
+# - Determine if the user is reading, filling a form, watching media, or researching something.
+
+# THINK:
+# - What is the user’s likely goal (e.g., finding information, filling a form, accessing email)?
+# - Are there interactive elements (e.g., buttons, links, forms) relevant to the task?
+# - Is scrolling, tab switching, or typing required to proceed?
+# - What is the most efficient next step toward completing the task?
+# - Avoid redundant actions or unsafe navigation (e.g., clicking ads or unknown popups).
+
+# ACT:
+# - Click on links or buttons by locating them and left-clicking.
+# - Enter text by clicking into text fields and simulating keystrokes.
+# - Scroll the page if content is hidden below the fold.
+# - Switch tabs by clicking on the appropriate browser tab.
+# - Use the address bar to enter or modify URLs or search queries.
+# - Close popups or irrelevant tabs if they interfere with the task.
+# - Submit forms or confirm actions when needed.
+
+# RULES:
+# - Do not click on advertisements or unknown external links.
+# - Always keep the user’s task context in mind (e.g., don’t navigate away during form filling).
+# - Avoid closing tabs unless they are clearly irrelevant or distracting.
+# - Ensure all required fields are filled before submitting a form.
+
+# EXAMPLES:
+# - If a Google search result is shown, click the most relevant link based on the task goal.
+# - If an email login page is open, enter the username and password, then click "Sign in".
+# - If a YouTube video is paused, click the play button to resume.
+# - If a form requires user input, fill in the correct data and click "Submit".
+
+# Respond only with action instructions or a thought-action reasoning trace.
+# """

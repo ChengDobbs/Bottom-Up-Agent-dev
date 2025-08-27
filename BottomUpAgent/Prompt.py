@@ -5,6 +5,7 @@ def generate_skill_prompt(operations):
 
 Objectives:
 - Analyze the recent UI-level operations you performed.
+- Determine if the operation sequence is complete or requires continuation.
 
 Inputs:
 1. A list of UI-level operations: '{operations}'
@@ -13,13 +14,22 @@ Inputs:
 Instructions:
 1. Determine which UI elements were interacted with, based on the coordinates provided.
 2. Analyze how the game screen changed during the operations.
-3. Give this sequence of operations a meaningful **name** and a **description** that includes:
-   - What the operation does (its function)
-   - Any precautions to take
-4. The name must be highly relevant to the actual operations performed.
-5. If the operations are **meaningless**, use the `no_meaning_skill` tool to report it.
-6. If the operations are **meaningful**, use the `save_skill` tool to save the result.
+3. **Assess Operation Completeness:**
+   - COMPLETE: The operation achieves a self-contained, meaningful action (e.g., "Open menu", "Close dialog", "Complete card play")
+   - INCOMPLETE: The operation starts an action but requires follow-up steps (e.g., "Select card" but target not chosen, "Open submenu" but no selection made)
+4. Give this sequence of operations a meaningful **name** and a **description**.
+5. **Decision Logic:**
+   - If operations are **meaningless** → use `no_meaning_skill` tool
+   - If operations are **complete and meaningful** → use `save_skill` tool
+   - If operations are **incomplete but meaningful** → use `incomplete_skill` tool with next_action_hint
+6. For incomplete operations, provide a clear hint about what should happen next.
 7. Think step by step before making a decision.
+
+**Examples:**
+- Clicking a card in hand → INCOMPLETE (needs target selection)
+- Clicking a card then clicking enemy → COMPLETE (full attack sequence)
+- Opening a menu → INCOMPLETE (needs menu selection)
+- Opening menu then selecting option → COMPLETE (full menu interaction)
 """
             
 
