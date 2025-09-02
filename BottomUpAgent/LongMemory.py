@@ -5,30 +5,37 @@ import cv2
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 import os
+import threading
 from .Mcts import MCTS
 from .VectorMemory import VectorMemory
 
 class LongMemory:
     def __init__(self, config):
         self.name = config['game_name']
-        # 创建标准化的数据库路径
         sql_db_dir = './data/sql'
         os.makedirs(sql_db_dir, exist_ok=True)
-        db_path = os.path.join(sql_db_dir, f'{self.name.lower().replace(" ", "_")}.db')
-        self.longmemory = sqlite3.connect(db_path)
+        self.db_path = os.path.join(sql_db_dir, f'{self.name.lower().replace(" ", "_")}.db')
         self.sim_threshold = config['long_memory']['sim_threshold']
         
-        # 初始化向量数据库
         self.vector_memory = VectorMemory(config)
+        
+        self._local = threading.local()
 
         if not self.is_initialized():
             self.initialize()
 
         # self.objects = self.get_objects() 
 
+    def get_connection(self):
+        """Get thread-safe database connection"""
+        if not hasattr(self._local, 'connection'):
+            self._local.connection = sqlite3.connect(self.db_path, check_same_thread=False)
+        return self._local.connection
+
     def is_initialized(self):
         # detect database whether has the table named init
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
 
         if cursor.fetchone():
@@ -39,7 +46,8 @@ class LongMemory:
     def initialize(self): 
         print("Initializing LongMomery")
         #create table
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
 
         cursor.execute("CREATE TABLE IF NOT EXISTS states (id INTEGER PRIMARY KEY, state_feature BLOB, mcts TEXT, object_ids TEXT, skill_clusters TEXT)")
 
@@ -50,17 +58,17 @@ class LongMemory:
 
         cursor.execute("CREATE TABLE IF NOT EXISTS skill_clusters (id INTEGER PRIMARY KEY, state_feature BLOB, name TEXT, description TEXT, members TEXT, explore_nums INTEGER)")
         
-        # 创建对象交互历史记录表
         cursor.execute("CREATE TABLE IF NOT EXISTS object_interactions (id INTEGER PRIMARY KEY, object_id INTEGER, operation_type TEXT, interactivity TEXT, screen_change_ratio REAL, state_changed INTEGER, timestamp REAL, FOREIGN KEY(object_id) REFERENCES objects(id))")
 
-        self.longmemory.commit()
+        conn.commit()
 
 
     """   Objects   """
         
     def get_object_by_ids(self, ids):
         objects = []
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute('SELECT id, content, image, hash, area, vector_id, bbox, center, interactivity FROM objects WHERE id IN ({})'.format(','.join('?'*len(ids))), ids)
         records = cursor.fetchall()
 
@@ -69,7 +77,6 @@ class LongMemory:
             image = cv2.imdecode(np.frombuffer(image_blob, np.uint8), cv2.IMREAD_COLOR)
             hash = pickle.loads(hash_blob)
             
-            # 解析JSON字段
             bbox = json.loads(bbox_str) if bbox_str else []
             center = json.loads(center_str) if center_str else [0, 0]
             
@@ -89,7 +96,8 @@ class LongMemory:
 
     def get_recent_objects(self, limit=50):
         """Get recent objects from the database for MCP context"""
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute('''
             SELECT id, content, image, hash, area, vector_id, bbox, center, interactivity 
             FROM objects 
@@ -122,7 +130,8 @@ class LongMemory:
         return objects
 
     def update_objects(self, state, objects, text_weight=0.3, image_weight=0.5, bbox_weight=0.2, bbox_scale=1000.0):
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         updated_objects_nums = 0
         
         # Use VecDB to deduplicate and store objs (mixed)
@@ -133,7 +142,6 @@ class LongMemory:
         
         for obj in processed_objects:
             if obj['id'] is None:
-                # New object - 存储到SQLite
                 _, image_blob = cv2.imencode('.png', obj['image'])
                 image_blob = image_blob.tobytes()
                 hash_blob = pickle.dumps(obj['hash'])
@@ -157,7 +165,6 @@ class LongMemory:
                 
                 print(f"Stored new object: ID={obj['id']}, Content='{obj['content'][:20]}...', Vector_ID={obj.get('vector_id', 'N/A')}")
             else:
-                # 已存在的对象，可能需要更新向量ID
                 if 'vector_id' in obj:
                     cursor.execute(
                         "UPDATE objects SET vector_id = ? WHERE id = ?", 
@@ -167,11 +174,12 @@ class LongMemory:
         cursor.execute("UPDATE states SET object_ids = ? WHERE id = ?", (json.dumps(state['object_ids']), state['id']))
         print(f"Updated objects nums: {updated_objects_nums}")
         print(f"Vector database stats: {self.vector_memory.get_collection_stats()}")
-        self.longmemory.commit()
+        conn.commit()
         return processed_objects
 
     def get_object_image_by_id(self, id):
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute('SELECT image FROM objects WHERE id = ?', (id,))
         record = cursor.fetchone()
 
@@ -183,23 +191,14 @@ class LongMemory:
         return image
     
     def record_object_interaction(self, object_id: int, operation_type: str, interactivity: str, screen_change_ratio: float, state_changed: bool):
-        """
-        记录对象交互历史
-        
-        Args:
-            object_id: 对象ID
-            operation_type: 操作类型 ('Click', 'Touch')
-            interactivity: 交互性类型
-            screen_change_ratio: 屏幕变化比例
-            state_changed: 是否发生状态变化
-        """
         import time
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO object_interactions (object_id, operation_type, interactivity, screen_change_ratio, state_changed, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
             (object_id, operation_type, interactivity, screen_change_ratio, int(state_changed), time.time())
         )
-        self.longmemory.commit()
+        conn.commit()
         print(f"Recorded interaction: Object {object_id}, {operation_type} -> {interactivity}")
     
     def get_object_interaction_patterns(self, object_id: int):
@@ -212,7 +211,8 @@ class LongMemory:
         Returns:
             dict: 包含不同操作类型的交互模式
         """
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute(
             "SELECT operation_type, interactivity, COUNT(*) as count FROM object_interactions WHERE object_id = ? GROUP BY operation_type, interactivity ORDER BY count DESC",
             (object_id,)
@@ -247,9 +247,10 @@ class LongMemory:
         comprehensive_interactivity = self._determine_comprehensive_interactivity(patterns)
         
         # 更新对象的交互性属性
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute("UPDATE objects SET interactivity = ? WHERE id = ?", (comprehensive_interactivity, object_id))
-        self.longmemory.commit()
+        conn.commit()
         print(f"Updated object {object_id} comprehensive interactivity to: {comprehensive_interactivity}")
     
     def _determine_comprehensive_interactivity(self, patterns: dict) -> str:
@@ -344,16 +345,18 @@ class LongMemory:
         objects_ids_str = json.dumps(state['object_ids'])
         skill_clusters_str = json.dumps(state['skill_clusters'])
 
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute("INSERT INTO states (state_feature, mcts, object_ids, skill_clusters) VALUES (?, ?, ?, ?)", 
                        (state_feature_blob, mcts_str, objects_ids_str, skill_clusters_str))
-        self.longmemory.commit()
+        conn.commit()
 
         state_id = cursor.lastrowid
         return state_id
 
     def get_state(self, ob, sim_threshold=0.85):
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute('SELECT id, state_feature, mcts, object_ids, skill_clusters FROM states')
         records = cursor.fetchall()
 
@@ -387,15 +390,17 @@ class LongMemory:
         objects_ids_str = json.dumps(state['object_ids'])
         skill_clusters_str = json.dumps(state['skill_clusters'])
 
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute("UPDATE states SET mcts = ?, object_ids = ?, skill_clusters = ? WHERE id = ?", 
                        (mcts_str, objects_ids_str, skill_clusters_str, state['id']))
-        self.longmemory.commit()
+        conn.commit()
 
     """   skill clusters   """
     
     def get_skill_clusters_by_id(self, id):
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute('SELECT id, name, description, members, explore_nums FROM skill_clusters WHERE id = ?', (id,))
         record = cursor.fetchone()
 
@@ -414,18 +419,20 @@ class LongMemory:
     def save_skill_cluster(self, state_feature, name, description, members, explore_nums=1):
         state_feature_blob = pickle.dumps(state_feature)
 
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute("INSERT INTO skill_clusters(state_feature, name, description, members, explore_nums) VALUES (?, ?, ?, ?, ?)", \
                        (state_feature_blob, name, description, json.dumps(members), explore_nums))
         
         skill_cluster_id = cursor.lastrowid
-        self.longmemory.commit()
+        conn.commit()
 
         return skill_cluster_id
     
     def get_skill_clusters_by_ids(self, ids):
         skill_clusters = []
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute('SELECT id, name, description, members, explore_nums FROM skill_clusters WHERE id IN ({})'.format(','.join('?'*len(ids))), ids)
         records = cursor.fetchall()
 
@@ -437,15 +444,17 @@ class LongMemory:
     
     def update_skill_cluster(self, id, state_feature, name, description, members):
 
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute("UPDATE skill_clusters SET name = ?, description = ?, members = ? WHERE id = ?", \
                        (name, description, json.dumps(members), id))
-        self.longmemory.commit()
+        conn.commit()
 
     def update_skill_cluster_explore_nums(self, id, explore_nums):
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute("UPDATE skill_clusters SET explore_nums = ? WHERE id = ?", (explore_nums, id))
-        self.longmemory.commit()
+        conn.commit()
 
 
     """   skills   """
@@ -456,23 +465,26 @@ class LongMemory:
         _, image2_blob = cv2.imencode('.png', image2)
         image2_blob = image2_blob.tobytes()
 
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute("INSERT INTO skills (name, description, operations, fitness, num, state_id, mcts_node_id, image1, image2) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", \
                        (name, description, json.dumps(operations), fitness, num, state_id, mcts_node_id, image1_blob, image2_blob))
-        self.longmemory.commit()
+        conn.commit()
 
         skill_id = cursor.lastrowid
         return skill_id
 
     def update_skill(self, id, fitness, num):
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute("UPDATE skills SET fitness = ?, num = ? WHERE id = ?", (fitness, num, id))
-        self.longmemory.commit()
+        conn.commit()
 
     
     def get_skills_by_ids(self, ids):
         skills = []
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute('SELECT id, name, description, operations, fitness, num, state_id, mcts_node_id FROM skills WHERE id IN ({})'.format(','.join('?'*len(ids))), ids)
         records = cursor.fetchall()
 
@@ -492,7 +504,8 @@ class LongMemory:
         return skills
 
     def delete_skill(self, skill, skill_cluster):
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         
         # delete skill from skill cluster
         if skill['id'] in skill_cluster['members']:
@@ -505,10 +518,11 @@ class LongMemory:
         # delete skill from skills
         id = skill['id']
         cursor.execute("DELETE FROM skills WHERE id = ?", (id,))
-        self.longmemory.commit()
+        conn.commit()
 
     def get_skills(self):
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute('SELECT id, name, description, operations, fitness, num, state_id, mcts_node_id FROM skills')
         records = cursor.fetchall()
 
@@ -576,7 +590,8 @@ class LongMemory:
         Returns:
             区域内的对象列表
         """
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         cursor.execute('SELECT id, content, bbox, center, vector_id FROM objects WHERE bbox IS NOT NULL')
         records = cursor.fetchall()
         
@@ -623,7 +638,8 @@ class LongMemory:
         Returns:
             交互历史列表
         """
-        cursor = self.longmemory.cursor()
+        conn = self.get_connection()
+        cursor = conn.cursor()
         
         # 查找涉及该对象的技能
         cursor.execute('''

@@ -1,0 +1,120 @@
+project_name: 'GymAgent'
+game_name: 'FrozenLake-v1'
+run_name: 'frozenlake - discrete - interactive'
+close_explore: False
+close_reflexion: False
+close_reset: False
+is_base: False
+use_mcp: True
+mcp:
+  max_iter: 8
+
+result_path: 'results'
+exec_duration: 1.0  # Longer wait time for user interaction
+
+teacher_type: 'Human'  # Human interaction for discrete decisions
+
+brain:
+  base_model: 'claude-3-7-sonnet-20250219'
+  evaluate_model: 'gpt-4o'
+  uct_c: 5.0
+  uct_threshold: 0.0
+
+# Gym environment specific configuration
+gym_env:
+  env_id: 'FrozenLake-v1'
+  render_mode: 'human'  # For visual feedback
+  is_slippery: False    # Disable slippery for deterministic actions
+  map_name: '4x4'       # Start with 4x4 grid
+  max_episode_steps: 100
+  
+  # Action space configuration
+  action_space:
+    type: 'Discrete'
+    n: 4  # 0: Left, 1: Down, 2: Right, 3: Up
+    
+  # Observation space configuration  
+  observation_space:
+    type: 'Discrete'
+    n: 16  # 4x4 grid positions
+
+# Long-term memory configuration
+long_memory:
+  sim_threshold: 0.85
+
+# Vector database configuration
+vector_memory:
+  similarity_threshold: 0.92
+  embedding_type: "open_clip"
+  clip_model: "ViT-B/32"
+  vector_dim: 512
+  batch_size: 32
+  
+  image_preprocessing:
+    target_size: [224, 224]
+    normalize: true
+    
+  similarity_matching:
+    high_threshold: 0.9
+    medium_threshold: 0.7
+    low_threshold: 0.5
+    
+  deduplication:
+    enabled: true
+    spatial_threshold: 10
+    content_similarity: 0.8
+    
+  storage_optimization:
+    compress_vectors: false
+    pca_components: 256
+    cache_size: 1000
+    
+  retrieval:
+    default_top_k: 10
+    max_results: 50
+    enable_reranking: true
+
+# Detector configuration
+detector:
+  type: 'omni'
+  clip_model: 'ViT-B/32'
+  
+  omni:
+    som_model_path: './weights/icon_detect/model.pt'
+    caption_model_name: 'florence2'
+    caption_model_path: './weights/icon_caption_florence'
+    BOX_TRESHOLD: 0.6
+    iou_threshold: 0.4
+    text_overlap_threshold: 0.25
+
+# Database path configuration
+database:
+  sqlite_path: "./data/sql/frozenlake.db"
+  vector_db_path: "./data/vector/frozenlake"
+  backup_enabled: true
+  backup_interval: 3600
+
+# Logging configuration
+logging:
+  level: "INFO"
+  file: "./logs/frozenlake_agent.log"
+  max_size: "10MB"
+  backup_count: 5
+
+# Performance configuration
+performance:
+  use_gpu: false
+  num_workers: 4
+  prefetch_factor: 2
+  pin_memory: true
+
+# Experimental features
+experimental:
+  multimodal_fusion: false
+  semantic_clustering: false
+  temporal_tracking: false
+
+# Display configuration for gym rendering
+eye:
+  width: 800
+  height: 600

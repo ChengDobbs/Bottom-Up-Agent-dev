@@ -47,7 +47,7 @@ class VectorMemory:
         # 检查是否需要清空数据库
         clear_on_init = config.get('vector_memory', {}).get('clear_on_init', False)
         if clear_on_init:
-            self.logger.info("配置要求清空向量数据库")
+            self.logger.info("CLEARING VECTOR DATABASE AS CONFIGURED")
             self.clear_database()
         
         # 初始化Chroma数据库 - get_or_create_collection会自动处理创建逻辑
@@ -99,10 +99,10 @@ class VectorMemory:
                     metadata={"hnsw:space": "cosine"}
                 )
             
-            self.logger.info(f"Chroma数据库初始化成功: {self.vector_db_path}")
+            self.logger.info(f"CHROMA DB INITIALIZED: {self.vector_db_path}")
             
         except Exception as e:
-            self.logger.error(f"Chroma数据库初始化失败: {e}")
+            self.logger.error(f"CHROMA DB INITIALIZATION FAILED: {e}")
             raise
     
     def encode_image(self, image: np.ndarray) -> np.ndarray:
@@ -135,7 +135,7 @@ class VectorMemory:
             return image_features.cpu().numpy().flatten()
             
         except Exception as e:
-            self.logger.error(f"图像编码失败: {e}")
+            self.logger.error(f"IMAGE ENCODING FAILED: {e}")
             return np.zeros(self.vector_dim)
     
     def encode_text(self, text: str) -> np.ndarray:
@@ -160,7 +160,7 @@ class VectorMemory:
             return text_features.cpu().numpy().flatten()
             
         except Exception as e:
-            self.logger.error(f"文本编码失败: {e}")
+            self.logger.error(f"TEXT ENCODING FAILED: {e}")
             return np.zeros(self.vector_dim)
     
     def _preprocess_object_image(self, image: np.ndarray, target_size: Tuple[int, int] = (224, 224)) -> np.ndarray:
@@ -262,11 +262,11 @@ class VectorMemory:
                 ids=[object_id]
             )
             
-            self.logger.info(f"对象存储成功: {object_id}")
+            self.logger.info(f"OBJECT STORED: {object_id}")
             return object_id
             
         except Exception as e:
-            self.logger.error(f"对象存储失败: {e}")
+            self.logger.error(f"OBJECT STORAGE FAILED: {e}")
             return ""
     
     def batch_store_objects(self, objects: List[Dict]) -> List[str]:
@@ -338,11 +338,11 @@ class VectorMemory:
                 ids=ids
             )
             
-            self.logger.info(f"批量存储完成: {len(objects)} 个对象")
+            self.logger.info(f"BATCH STORAGE COMPLETED: {len(objects)} objects")
             return ids
             
         except Exception as e:
-            self.logger.error(f"批量存储失败: {e}")
+            self.logger.error(f"BATCH STORAGE FAILED: {e}")
             return []
     
     def find_similar_objects(self, query_obj: Dict, threshold: float = None, top_k: int = 5, embedding_type="default") -> List[Dict]:
@@ -414,7 +414,7 @@ class VectorMemory:
             return similar_objects
             
         except Exception as e:
-            self.logger.error(f"相似度搜索失败: {e}")
+            self.logger.error(f"SIMILARITY SEARCH FAILED: {e}")
             return []
     
     def deduplicate_objects(self, objects: List[Dict], threshold: float = None, 
@@ -443,6 +443,12 @@ class VectorMemory:
         new_objects = []
         duplicate_objects = []
         
+        collection_count = self.object_collection.count()
+        database_is_empty = collection_count == 0
+        
+        if database_is_empty:
+            self.logger.info("DATABASE IS EMPTY - Skipping database deduplication, only checking batch duplicates")
+        
         # 为每个对象生成hash以提高比较效率
         for obj in objects:
             if 'hash' not in obj or not obj['hash']:
@@ -462,7 +468,7 @@ class VectorMemory:
                         'similarity': 1.0,
                         'reason': 'identical_hash_batch'
                     })
-                    print(f"Duplicate Obj (Hash-Batch): {obj.get('content', 'Unknown')} (Sim: 1.000)")
+                    print(f"🔄 DUPLICATE DETECTED (Hash-Batch): {obj.get('content', 'Unknown')} (Sim: 1.000)")
                     found_duplicate = True
                     break
             
@@ -470,7 +476,7 @@ class VectorMemory:
                 continue
                 
             # 阶段1b: 在数据库中查找完全相同的hash（与已存储对象去重）
-            if obj.get('hash'):
+            if not database_is_empty and obj.get('hash'):
                 try:
                     # 直接使用where条件查找相同hash的对象
                     hash_results = self.object_collection.get(
@@ -500,11 +506,11 @@ class VectorMemory:
                             'similarity': 1.0,
                             'reason': 'identical_hash_db'
                         })
-                        print(f"Duplicate Obj (Hash-DB): {obj.get('content', 'Unknown')} (Sim: 1.000)")
+                        print(f"🔄 DUPLICATE DETECTED (Hash-DB): {obj.get('content', 'Unknown')} (Sim: 1.000)")
                         found_duplicate = True
                         
                 except Exception as e:
-                    self.logger.debug(f"数据库hash查询失败: {e}")
+                    self.logger.debug(f"⚠️  DATABASE HASH QUERY FAILED: {e}")
                     # 如果直接hash查询失败，回退到文本查询+hash比较的方法
                     try:
                         hash_results = self.object_collection.query(
@@ -534,37 +540,38 @@ class VectorMemory:
                                     'similarity': 1.0,
                                     'reason': 'identical_hash_db'
                                 })
-                                print(f"Duplicate Obj (Hash-DB): {obj.get('content', 'Unknown')} (Sim: 1.000)")
+                                print(f"🔄 DUPLICATE DETECTED (Hash-DB): {obj.get('content', 'Unknown')} (Sim: 1.000)")
                                 found_duplicate = True
                                 break
                     except Exception as e2:
-                        self.logger.debug(f"回退hash查询也失败: {e2}")
+                        self.logger.debug(f"⚠️  FALLBACK HASH QUERY ALSO FAILED: {e2}")
             
             if found_duplicate:
                 continue
                 
-            # 阶段2: 使用混合查询进行更精确的相似性检测
-            similar_objects = self.query_collection_mixed(
-                obj, 
-                top_k=3,  # 获取前3个最相似的对象进行比较
-                text_weight=text_weight, 
-                image_weight=image_weight, 
-                bbox_weight=bbox_weight
-            )
+            # 阶段2: 使用混合查询进行更精确的相似性检测（仅在数据库非空时）
+            if not database_is_empty:
+                similar_objects = self.query_collection_mixed(
+                    obj, 
+                    top_k=3,  # 获取前3个最相似的对象进行比较
+                    text_weight=text_weight, 
+                    image_weight=image_weight, 
+                    bbox_weight=bbox_weight
+                )
 
-            if similar_objects:
-                # 检查是否有超过阈值的相似对象
-                best_match = similar_objects[0]
-                if best_match['similarity'] >= threshold:
-                    # 找到相似对象，标记为重复
-                    duplicate_objects.append({
-                        'original': obj,
-                        'similar': best_match,
-                        'similarity': best_match['similarity'],
-                        'reason': 'mixed_similarity'
-                    })
-                    print(f"Duplicate Obj (Mixed): {obj.get('content', 'Unknown')} (Sim: {best_match['similarity']:.3f})")
-                    found_duplicate = True
+                if similar_objects:
+                    # 检查是否有超过阈值的相似对象
+                    best_match = similar_objects[0]
+                    if best_match['similarity'] >= threshold:
+                        # 找到相似对象，标记为重复
+                        duplicate_objects.append({
+                            'original': obj,
+                            'similar': best_match,
+                            'similarity': best_match['similarity'],
+                            'reason': 'mixed_similarity'
+                        })
+                        print(f"🔄 DUPLICATE DETECTED (Mixed): {obj.get('content', 'Unknown')} (Sim: {best_match['similarity']:.3f})")
+                        found_duplicate = True
             
             if not found_duplicate:
                 # 新对象
@@ -616,12 +623,12 @@ class VectorMemory:
             original['id'] = similar.get('object_id', similar.get('id'))
             original['vector_id'] = similar.get('id')
             
-            self.logger.debug(f"对象去重: {original.get('content', 'Unknown')} -> {similar.get('id')}(相似度: {similar.get('mixed_similarity', 0):.3f})")
+            self.logger.debug(f"🔗 OBJECT DEDUPLICATED: {original.get('content', 'Unknown')} -> {similar.get('id')} (Similarity: {similar.get('mixed_similarity', 0):.3f})")
         
         # 合并结果
         all_objects = new_objects + [dup['original'] for dup in duplicate_objects]
         
-        self.logger.debug(f"对象处理完成: 新增 {len(new_objects)}, 去重 {len(duplicate_objects)}")
+        self.logger.info(f"📊 OBJECT PROCESSING COMPLETED: {len(new_objects)} new, {len(duplicate_objects)} duplicates")
         return all_objects
     
     def query_collection_by_text(self, content_query: str, top_k: int = 10) -> List[Dict]:
@@ -815,7 +822,7 @@ class VectorMemory:
             # 获取数据库中的总对象数量
             collection_count = self.object_collection.count()
             if collection_count == 0:
-                self.logger.warning("向量数据库为空，无法获取候选对象")
+                self.logger.info("📭 VECTOR DATABASE IS EMPTY - No candidates available for similarity search")
                 return []
             
             # 动态调整候选对象数量，确保不遗漏相似对象
@@ -874,7 +881,7 @@ class VectorMemory:
                                 'embedding': embedding
                             }
                 except Exception as e:
-                    self.logger.warning(f"获取补充候选对象失败: {e}")
+                    self.logger.warning(f"⚠️  FAILED TO GET ADDITIONAL CANDIDATES: {e}")
             
             # 为所有候选对象计算完整的文本和图像相似度
             query_text_embedding = None
@@ -898,7 +905,7 @@ class VectorMemory:
                         )
                         text_similarity = max(0, (text_cosine_sim + 1) / 2)  # 转换到[0,1]范围
                     except Exception as e:
-                        self.logger.debug(f"计算文本相似度失败: {e}")
+                        self.logger.debug(f"⚠️  TEXT SIMILARITY CALCULATION FAILED: {e}")
                 
                 # 优化的图像相似度计算 - 使用hash比较和更精确的阈值
                 if 'hash' in query_obj and query_obj['hash'] and 'hash' in candidate and candidate['hash']:
@@ -929,7 +936,7 @@ class VectorMemory:
                                 common_chars = sum(c1 == c2 for c1, c2 in zip(query_hash, candidate_hash))
                                 image_similarity = common_chars / max(len(query_hash), len(candidate_hash))
                     except Exception as e:
-                        self.logger.debug(f"计算图像hash相似度失败: {e}")
+                        self.logger.debug(f"⚠️  IMAGE HASH SIMILARITY CALCULATION FAILED: {e}")
                         image_similarity = 0.0
                 else:
                     image_similarity = 0.0
@@ -980,7 +987,7 @@ class VectorMemory:
             return sorted_results[:top_k]
             
         except Exception as e:
-            self.logger.error(f"混合查询失败: {e}")
+            self.logger.error(f"❌ MIXED QUERY FAILED: {e}")
             return []
     
     def clear_database(self):

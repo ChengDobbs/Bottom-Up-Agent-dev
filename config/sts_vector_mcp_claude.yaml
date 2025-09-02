@@ -10,7 +10,7 @@ mcp:
   max_iter: 8
 
 result_path: 'results'
-exec_duration: 0.8  # 增加操作等待时间以减少冲突
+exec_duration: 0.8  # Increase operation wait time to reduce conflicts
 
 teacher_type: 'Random' # Human or AI or Random
 
@@ -21,50 +21,50 @@ brain:
   uct_c: 5.0
   uct_threshold: 0.0
 
-# 长期记忆配置
+# Long-term memory configuration
 long_memory:
-  sim_threshold: 0.85  # 状态相似度阈值
+  sim_threshold: 0.85  # State similarity threshold
 
-# 向量数据库配置
+# Vector database configuration
 vector_memory:
-  similarity_threshold: 0.92  # 对象相似度阈值，用于去重
-  embedding_type: "open_clip"
-  clip_model: "ViT-B/32"     # CLIP模型版本
-  vector_dim: 512            # 向量维度
-  batch_size: 32             # 批处理大小
+  similarity_threshold: 0.92  # Object similarity threshold for deduplication
+  embedding_type: "open_clip"  # Use default embedding to avoid conflicts
+  clip_model: "ViT-B/32"     # CLIP model version
+  vector_dim: 512            # Vector dimension
+  batch_size: 32             # Batch size
   
-  # 图像预处理配置
+  # Image preprocessing configuration
   image_preprocessing:
-    target_size: [224, 224]   # 目标图像尺寸
-    normalize: true           # 是否归一化
+    target_size: [224, 224]   # Target image size
+    normalize: true           # Whether to normalize
     
-  # 相似度匹配配置
+  # Similarity matching configuration
   similarity_matching:
-    high_threshold: 0.9       # 高相似度阈值（认为是同一对象）
-    medium_threshold: 0.7     # 中等相似度阈值（可能相似）
-    low_threshold: 0.5        # 低相似度阈值（不太相似）
+    high_threshold: 0.9       # High similarity threshold (considered same object)
+    medium_threshold: 0.7     # Medium similarity threshold (possibly similar)
+    low_threshold: 0.5        # Low similarity threshold (not very similar)
     
-  # 去重策略配置
+  # Deduplication strategy configuration
   deduplication:
-    enabled: true             # 是否启用去重
-    spatial_threshold: 10     # 空间距离阈值（像素）
-    content_similarity: 0.8   # 内容相似度阈值
+    enabled: true             # Whether to enable deduplication
+    spatial_threshold: 10     # Spatial distance threshold (pixels)
+    content_similarity: 0.8   # Content similarity threshold
     
-  # 存储优化配置
+  # Storage optimization configuration
   storage_optimization:
-    compress_vectors: false   # 是否压缩向量
-    pca_components: 256       # PCA降维组件数
-    cache_size: 1000         # 缓存大小
+    compress_vectors: false   # Whether to compress vectors
+    pca_components: 256       # PCA dimension reduction components
+    cache_size: 1000         # Cache size
     
-  # 检索配置
+  # Retrieval configuration
   retrieval:
-    default_top_k: 10         # 默认返回结果数
-    max_results: 50           # 最大结果数
-    enable_reranking: true    # 是否启用重排序
+    default_top_k: 10         # Default number of results to return
+    max_results: 50           # Maximum number of results
+    enable_reranking: true    # Whether to enable reranking
 
-# 检测器配置（与向量数据库集成，同时支持MCP）
+# Detector configuration (integrated with vector database, also supports MCP)
 detector:
-  type: 'omni'  # 使用omni检测器
+  type: 'omni'  # Use omni detector
   clip_model: 'ViT-B/32'
   
   omni:
@@ -75,32 +75,32 @@ detector:
     iou_threshold: 0.4
     text_overlap_threshold: 0.25
 
-# 数据库路径配置
+# Database path configuration
 database:
-  sqlite_path: "./data/sql/slay_the_spire.db"           # SQLite数据库路径
-  vector_db_path: "./data/vector"        # Chroma向量数据库路径
-  backup_enabled: true                                  # 是否启用备份
-  backup_interval: 3600                                 # 备份间隔（秒）
+  sqlite_path: "./data/sql/slay_the_spire.db"           # SQLite database path
+  vector_db_path: "./data/vector"        # Chroma vector database path
+  backup_enabled: true                                  # Whether to enable backup
+  backup_interval: 3600                                 # Backup interval (seconds)
 
-# 日志配置
+# Logging configuration
 logging:
   level: "INFO"
   file: "./logs/vector_mcp_memory.log"
   max_size: "10MB"
   backup_count: 5
 
-# 性能配置
+# Performance configuration
 performance:
-  use_gpu: false              # 是否使用GPU
-  num_workers: 4             # 工作线程数
-  prefetch_factor: 2         # 预取因子
-  pin_memory: true           # 是否固定内存
+  use_gpu: false              # Whether to use GPU
+  num_workers: 4             # Number of worker threads
+  prefetch_factor: 2         # Prefetch factor
+  pin_memory: true           # Whether to pin memory
 
-# 实验性功能
+# Experimental features
 experimental:
-  multimodal_fusion: false   # 多模态融合
-  semantic_clustering: false # 语义聚类
-  temporal_tracking: false   # 时序跟踪
+  multimodal_fusion: false   # Multimodal fusion
+  semantic_clustering: false # Semantic clustering
+  temporal_tracking: false   # Temporal tracking
 
 eye:
   width: 1280

@@ -95,12 +95,16 @@ def environment_query_tools(model_name):
                     "properties": {
                         "query_type": {
                             "type": "string",
-                            "enum": ["all_objects", "clickable_objects", "text_content", "specific_object", "object_summary"],
-                            "description": "Type of environment query to perform"
+                            "enum": ["all_objects", "text_content", "specific_object", "object_summary", "game_state", "historical_context"],
+                            "description": "Type of environment query to perform. Note: 'clickable_objects' has been replaced with 'historical_context' for better efficiency"
                         },
                         "object_id": {
                             "type": "string",
                             "description": "Specific object ID to query (required for specific_object query_type)"
+                        },
+                        "context_query": {
+                            "type": "string",
+                            "description": "Query string for historical context search (optional for historical_context query_type)"
                         }
                     },
                     "required": ["query_type"],
@@ -120,12 +124,16 @@ def environment_query_tools(model_name):
                         "properties": {
                             "query_type": {
                                 "type": "string",
-                                "enum": ["all_objects", "clickable_objects", "text_content", "specific_object", "object_summary"],
-                                "description": "Type of environment query to perform"
+                                "enum": ["all_objects", "text_content", "specific_object", "object_summary", "game_state", "historical_context"],
+                                "description": "Type of environment query to perform. Note: 'clickable_objects' has been replaced with 'historical_context' for better efficiency"
                             },
                             "object_id": {
                                 "type": "string",
                                 "description": "Specific object ID to query (required for specific_object query_type)"
+                            },
+                            "context_query": {
+                                "type": "string",
+                                "description": "Query string for historical context search (optional for historical_context query_type)"
                             }
                         },
                         "required": ["query_type"],

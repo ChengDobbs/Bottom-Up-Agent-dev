@@ -42,6 +42,12 @@ Goals for AI:
 - Decide the best action: which cards to play, which enemies to target.
 - Consider card cost, effects, and current HP/block values.
 
+Reward Collection Strategy:
+- **ALWAYS collect Gold rewards** after completing battles or events - Gold is essential currency for purchasing powerful cards, relics, and upgrades at shops.
+- Gold has NO negative consequences when collected (unlike some mystery events with random rewards/penalties).
+- Prioritize Gold collection as it enables strategic purchases that significantly improve your deck's power.
+- Never skip Gold rewards - they are pure benefit with no downside.
+
 You must follow the game rules and UI logic exactly. Use only available tools like `Click`, `Drag`, and `EndTurn`. Always make progress toward winning the combat.
 
 """

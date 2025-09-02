@@ -84,21 +84,36 @@ def parse_args():
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     return parser.parse_args()
 
-# ---- Load config.yaml ----
-args = parse_args()
-default_config = load_config(args.config_file)
+# ---- Global variables ----
+default_config = None
+eye = None
+hand = None
+global_long_memory = None
 
-# ---- Initialize Eye and Hand ----
-eye = Eye(default_config)
-hand = Hand(default_config)
+def initialize_components(config_file=None):
+    """Initialize components with configuration"""
+    global default_config, eye, hand, global_long_memory
+    
+    if default_config is None:
+        default_config = load_config(config_file)
+        
+    if eye is None:
+        eye = Eye(default_config)
+        
+    if hand is None:
+        hand = Hand(default_config)
+        
+    if global_long_memory is None:
+        try:
+            global_long_memory = LongMemory(default_config)
+            print("Global LongMemory initialized successfully")
+        except Exception as e:
+            print(f"Error creating global LongMemory instance: {e}")
+            global_long_memory = None
 
 def get_long_memory():
-    """Create a new LongMemory instance for thread safety"""
-    try:
-        return LongMemory(default_config)
-    except Exception as e:
-        print(f"Error creating LongMemory instance: {e}")
-        return None
+    """Return the global LongMemory instance to avoid repeated initialization"""
+    return global_long_memory
 
 def highlight_yaml(yaml_str):
     """Convert YAML string to highlighted HTML with Python-based syntax highlighting"""
@@ -242,8 +257,14 @@ global_data = {
     'skill_clusters': []        # skill clusters
 }
 
-RECORD_DIR = os.path.join(os.getcwd(), default_config['result_path'], 
-                          default_config['game_name'], default_config['run_name'])
+# Initialize RECORD_DIR safely
+RECORD_DIR = None
+if default_config:
+    RECORD_DIR = os.path.join(os.getcwd(), default_config['result_path'], 
+                              default_config['game_name'], default_config['run_name'])
+else:
+    RECORD_DIR = os.path.join(os.getcwd(), 'results', 'default_game', 'default_run')
+
 recording = False
 
 # Playback states
@@ -1147,6 +1168,10 @@ def record_data(record):
 
 def main():
     """Main entry point for the visualizer"""
+    # Parse arguments and initialize components
+    args = parse_args()
+    initialize_components(args.config_file)
+    
     print("Starting Enhanced Visualizer...")
     print(f"Configuration file: {args.config_file or 'config/sts_explore_claude.yaml'}")
     print("Features:")

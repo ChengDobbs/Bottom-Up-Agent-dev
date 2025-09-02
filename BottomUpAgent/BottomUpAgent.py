@@ -281,7 +281,11 @@ class BottomUpAgent:
             skill_cluster = self.brain.long_memory.get_skill_clusters_by_id(skill_cluster_id)
             skills = self.brain.long_memory.get_skills_by_ids(skill_cluster['members'])
             print(f"selected skill_cluster id: {skill_cluster['id']} name: {skill_cluster['name']} description: {skill_cluster['description']}")
-            push_data({'skill_goal': {'id': skill_cluster['id'], "name": skill_cluster['name'], "description": skill_cluster['description']}})
+            try:
+                from .visualizer import push_data
+                push_data({'skill_goal': {'id': skill_cluster['id'], "name": skill_cluster['name'], "description": skill_cluster['description']}})
+            except ImportError:
+                pass  # Visualizer not available
 
         result = 'Retry'
         suspended_skill_ids = []
@@ -289,7 +293,11 @@ class BottomUpAgent:
             skill, suspend_flag = self.brain.select_skill(skills, skill_cluster, suspended_skill_ids, self.close_explore)
             if skill['name'] == 'Explore':
                 self.logger.log({"decision": 0, "decision_text": "Explore"}, step)
-                push_data({'decision': "Explore"})
+                try:
+                    from .visualizer import push_data
+                    push_data({'decision': "Explore"})
+                except ImportError:
+                    pass  # Visualizer not available
 
                 result = self.explore(step, state, skill, skill_clusters)
                 if skill_cluster is not None:
@@ -297,7 +305,11 @@ class BottomUpAgent:
                 break
             else:
                 self.logger.log({"decision": 1, "decision_text": "Exploit"}, step)
-                push_data({'decision': "Exploit"})
+                try:
+                    from .visualizer import push_data
+                    push_data({'decision': "Exploit"})
+                except ImportError:
+                    pass  # Visualizer not available
                 suspended_skill_ids.append(skill['id'])
                 # Enhanced exploit with MCP support
                 if self.use_mcp:
@@ -414,13 +426,17 @@ class BottomUpAgent:
                 'params': mcp_result['params']
             }
             
-            # Handle fallback decision (random exploration) with selected_object info
-            if mcp_result.get('fallback_decision') and 'selected_object' in mcp_result:
+            # First priority: use object_id directly from MCP result if available
+            if 'object_id' in mcp_result:
+                select_operation['object_id'] = mcp_result['object_id']
+                print(f"MCP provided object_id: {select_operation['object_id']}")
+            # Second priority: handle fallback decision with selected_object info
+            elif mcp_result.get('fallback_decision') and 'selected_object' in mcp_result:
                 selected_obj = mcp_result['selected_object']
                 select_operation['object_id'] = selected_obj.get('id', 'None')
                 print(f"MCP fallback selected object ID: {select_operation['object_id']}")
             else:
-                # Try to match with candidate operations to get object_id
+                # Third priority: try to match with candidate operations to get object_id
                 mcp_x, mcp_y = None, None
                 if 'coordinate' in mcp_result['params']:
                     mcp_x, mcp_y = mcp_result['params']['coordinate']
@@ -837,9 +853,12 @@ class BottomUpAgent:
             
             # Get hint context for MCP decision making
             hint_context = self.get_hint_context()
-            pre_knowledge = get_pre_knowledge(self.game_name)
+            base_pre_knowledge = get_pre_knowledge(self.game_name)
             if hint_context:
-                pre_knowledge += f"\n\nHint Context:\n{hint_context}"
+                base_pre_knowledge += f"\n\nHint Context:\n{hint_context}"
+            
+            # Enhance pre_knowledge with historical insights
+            pre_knowledge = self.brain.enhance_pre_knowledge_with_history(base_pre_knowledge, task)
             
             # Use MCP-style interaction for operation selection
             mcp_result = self.brain.do_operation_mcp(
@@ -863,6 +882,15 @@ class BottomUpAgent:
                     'operate': mcp_result['operate'],
                     'params': mcp_result['params']
                 }
+                
+                # Include object_id from MCP result if available
+                if 'object_id' in mcp_result:
+                    operation['object_id'] = mcp_result['object_id']
+                    print(f"MCP exploit operation with object_id: {operation['object_id']}")
+                else:
+                    operation['object_id'] = 'None'
+                    print("MCP exploit operation without object_id, setting to None")
+                
                 operations = [operation]  # Use MCP-selected operation
             else:
                 print(f"Unknown MCP action type: {mcp_result['action_type']}")

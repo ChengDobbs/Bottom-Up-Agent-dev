@@ -1,11 +1,11 @@
 import sqlite3
+import time
 
 from base_model import creat_base_model
 from . import Prompt
 from . import FunctionCalls
 from utils.utils import cv_to_base64
 from .LongMemory import LongMemory
-from .visualizer import push_data
 import numpy as np
 import random
 from sklearn.metrics.pairwise import cosine_similarity
@@ -37,6 +37,11 @@ class Brain:
         self.uct_c = config['brain']['uct_c']
         self.uct_threshold = config['brain']['uct_threshold']
         self.max_mcp_iter = config.get('mcp', {}).get('max_iter', 8)
+        
+        # 🧠 MCP Historical Context Management
+        self.mcp_conversation_history = []  # Persistent conversation history across MCP calls
+        self.max_history_length = config.get('mcp', {}).get('max_history_length', 20)  # Keep last 20 interactions
+        self.context_retention_threshold = config.get('mcp', {}).get('context_retention_threshold', 0.7)  # Similarity threshold for context reuse
 
     def select_skill_cluster(self, step, ob, skills):
         # select id name description from skills
@@ -93,25 +98,52 @@ class Brain:
 
             ucts = []
             for skill in candidate_skills:
-                uct = skill['fitness'] + self.uct_c * np.sqrt(np.log(num_total) / skill['num'])
+                # Add safety check to prevent division by zero and NaN values
+                skill_num = max(skill['num'], 1)  # Ensure num is at least 1
+                if num_total <= 0:
+                    num_total = 1  # Ensure num_total is positive
+                uct = skill['fitness'] + self.uct_c * np.sqrt(np.log(num_total) / skill_num)
+                # Check for NaN or infinite values
+                if np.isnan(uct) or np.isinf(uct):
+                    uct = skill['fitness']  # Fallback to fitness value only
                 ucts.append(uct)
 
             if not close_exploration:
-                ucts.append(self.uct_threshold + self.uct_c * np.sqrt(np.log(num_total) / skill_cluster['explore_nums']))
+                # Add safety check for exploration UCT calculation
+                explore_nums = max(skill_cluster['explore_nums'], 1)  # Ensure explore_nums is at least 1
+                explore_uct = self.uct_threshold + self.uct_c * np.sqrt(np.log(num_total) / explore_nums)
+                # Check for NaN or infinite values
+                if np.isnan(explore_uct) or np.isinf(explore_uct):
+                    explore_uct = self.uct_threshold  # Fallback to threshold only
+                ucts.append(explore_uct)
                 candidate_skills.append({'id': 'Explore', 'name': 'Explore', 'num': skill_cluster['explore_nums'], 
                                          'fitness': self.uct_threshold, 'mcts_node_id': mcts_node_id})
             
             ucts = np.array(ucts)
+            # Additional safety checks for UCT array
+            ucts = np.nan_to_num(ucts, nan=0.0, posinf=1e6, neginf=-1e6)
+            
             temperature = max(self.temperature(num_total), 1e-2)
             scaled_ucts = ucts / temperature
             scaled_ucts -= np.max(scaled_ucts)  
             exp_ucts = np.exp(scaled_ucts)
             exp_ucts = np.clip(exp_ucts, 1e-10, None)
-            probs = exp_ucts / np.sum(exp_ucts)
+            
+            # Ensure exp_ucts doesn't contain NaN or inf values
+            exp_ucts = np.nan_to_num(exp_ucts, nan=1e-10, posinf=1e6, neginf=1e-10)
+            
+            sum_exp_ucts = np.sum(exp_ucts)
+            if sum_exp_ucts == 0 or np.isnan(sum_exp_ucts) or np.isinf(sum_exp_ucts):
+                # Fallback to uniform distribution
+                probs = np.ones(len(exp_ucts)) / len(exp_ucts)
+            else:
+                probs = exp_ucts / sum_exp_ucts
+            
+            # Final safety check for probabilities
+            probs = np.nan_to_num(probs, nan=1.0/len(probs), posinf=1.0, neginf=0.0)
+            probs = probs / np.sum(probs)  # Renormalize to ensure sum equals 1
 
             print(f"ucts: {ucts}, exp_ucts: {exp_ucts}, num: {num_total}, temp: {temperature}")
-            
-            probs = exp_ucts / np.sum(exp_ucts)
             print(f"probs: {probs}")
 
             
@@ -122,7 +154,11 @@ class Brain:
 
             selected_skill = np.random.choice(candidate_skills, p=probs)
 
-            push_data({'candidate_skills': skills_info, 'temperature': round(temperature,2), 'selected_skill_id': selected_skill['id']})
+            try:
+                from .visualizer import push_data
+                push_data({'candidate_skills': skills_info, 'temperature': round(temperature,2), 'selected_skill_id': selected_skill['id']})
+            except ImportError:
+                pass  # Visualizer not available
 
             if probs[-1] > 0.9:
                 return selected_skill, True
@@ -174,7 +210,11 @@ class Brain:
                 self.long_memory.delete_skill(skill, skill_cluster)
                 delete_ids.append(skill['id'])
         print("end skill evolution")
-        push_data({'delete_ids': delete_ids})
+        try:
+            from .visualizer import push_data
+            push_data({'delete_ids': delete_ids})
+        except ImportError:
+            pass  # Visualizer not available
         self.logger.log({f"skills/skills_delete_num": len(delete_ids)}, step)
 
     def skill_log(self, logger, step):
@@ -288,10 +328,19 @@ class Brain:
                     x, y = operation['params']['x'], operation['params']['y']
                 cords = f"({x}, {y})"
                 operations_str += 'operation' + str(idx) + ': ' + operation['operate'] + ' ' + cords + '\n'
+            elif operation['operate'] == 'Drag' and 'params' in operation:
+                # Handle Drag operations with coordinates
+                params = operation['params']
+                if all(key in params for key in ['x1', 'y1', 'x2', 'y2']):
+                    cords = f"({params['x1']}, {params['y1']}) to ({params['x2']}, {params['y2']})"
+                    operations_str += 'operation' + str(idx) + ': ' + operation['operate'] + ' ' + cords + '\n'
+                else:
+                    operations_str += 'operation' + str(idx) + ': ' + operation['operate'] + '\n'
             else:
                 # Handle other operation types without coordinates
                 operations_str += 'operation' + str(idx) + ': ' + operation['operate'] + '\n'
-        operations[-1].pop('params', None)
+        # Create a copy of operations for saving to preserve params
+        operations_to_save = [op.copy() for op in operations]
         prompt = Prompt.generate_skill_prompt(operations_str)
         imgs_64 = [cv_to_base64(ob['screen']) for ob in obs]
         response = self.base_model.call_text_images(prompt, imgs_64, self.generate_skill_tools)
@@ -303,7 +352,7 @@ class Brain:
         if response['function'] is not None:
             if response['function']['name'] == "save_skill":
                 id = self.long_memory.save_skill(response['function']['input']['name'], response['function']['input']['description'], 
-                                            operations, 0, 1, state_id, mcst_node_id, obs[0]['screen'], obs[-1]['screen'])
+                                            operations_to_save, 0, 1, state_id, mcst_node_id, obs[0]['screen'], obs[-1]['screen'])
                 print(f"save skill: {response['function']['input']['name']}, operations: {operations_str}, fitness: {0}")
                 return {"id": id, "name": response['function']['input']['name'], "description": response['function']['input']['description']}
             elif response['function']['name'] == "incomplete_skill":
@@ -320,7 +369,7 @@ class Brain:
                 id = self.long_memory.save_skill(
                     response['function']['input']['name'], 
                     response['function']['input']['description'], 
-                    operations, -1, 0, state_id, mcst_node_id, 
+                    operations_to_save, -1, 0, state_id, mcst_node_id, 
                     obs[0]['screen'], obs[-1]['screen']
                 )
                 
@@ -341,12 +390,12 @@ class Brain:
             print("No function call!")
             return None
     
-    def execute_environment_query(self, query_type, detected_objects, object_id=None):
+    def execute_environment_query(self, query_type, detected_objects, object_id=None, context_query=None):
         """Execute enhanced environment query with game-specific intelligence"""
         if query_type == "all_objects":
             return self._format_all_objects_enhanced(detected_objects)
-        elif query_type == "clickable_objects":
-            return self._format_clickable_objects_enhanced(detected_objects)
+        elif query_type == "historical_context":
+            return self._query_historical_context(context_query)
         elif query_type == "text_content":
             return self._format_text_content_enhanced(detected_objects)
         elif query_type == "specific_object" and object_id:
@@ -429,7 +478,102 @@ class Brain:
         
         result += "💡 RECOMMENDATION: Focus on cards/actions for gameplay, buttons for navigation."
         return result
+
+    def _query_historical_context(self, context_query=None):
+        """Query historical MCP conversation context for relevant insights"""
+        if not self.mcp_conversation_history:
+            return "📚 No historical context available. This is a fresh start - explore the environment to build context."
+        
+        # If no specific query, return general historical summary
+        if not context_query:
+            return self._format_general_historical_context()
+        
+        # Search for relevant historical context based on query
+        relevant_contexts = []
+        query_lower = context_query.lower()
+        
+        for session in self.mcp_conversation_history:
+            relevance_score = 0
+            
+            # Check task relevance
+            if query_lower in session['task'].lower():
+                relevance_score += 3
+            
+            # Check findings relevance
+            for finding in session['key_findings']:
+                if query_lower in finding['result_preview'].lower():
+                    relevance_score += 2
+                if query_lower in finding['query_type'].lower():
+                    relevance_score += 1
+            
+            # Check decision relevance
+            if session['final_decision']:
+                decision_str = str(session['final_decision']).lower()
+                if query_lower in decision_str:
+                    relevance_score += 2
+            
+            if relevance_score > 0:
+                relevant_contexts.append((relevance_score, session))
+        
+        if not relevant_contexts:
+            return f"📚 No historical context found for '{context_query}'. Consider exploring this area or using a different query."
+        
+        # Sort by relevance and format results
+        relevant_contexts.sort(key=lambda x: x[0], reverse=True)
+        
+        result = f"📚 HISTORICAL CONTEXT for '{context_query}' ({len(relevant_contexts)} matches):\n\n"
+        
+        for i, (score, session) in enumerate(relevant_contexts[:3], 1):  # Show top 3
+            result += f"{i}. Task: '{session['task']}' (Score: {score})\n"
+            result += f"   - Queries: {session['query_count']}, Decision: {session['final_decision'].get('action_type', 'unknown')}\n"
+            
+            # Show relevant findings
+            relevant_findings = [f for f in session['key_findings'] 
+                               if context_query.lower() in f['result_preview'].lower() or 
+                                  context_query.lower() in f['query_type'].lower()]
+            
+            for finding in relevant_findings[:2]:  # Show top 2 relevant findings
+                result += f"   - {finding['query_type']}: {finding['result_preview'][:100]}...\n"
+            
+            result += "\n"
+        
+        result += "💡 Use these insights to make informed decisions and avoid repeating unsuccessful approaches."
+        return result
     
+    def _format_general_historical_context(self):
+        """Format general historical context summary"""
+        if not self.mcp_conversation_history:
+            return "📚 No historical context available."
+        
+        recent_sessions = self.mcp_conversation_history[-3:]  # Last 3 sessions
+        
+        result = f"📚 RECENT HISTORICAL CONTEXT ({len(recent_sessions)} sessions):\n\n"
+        
+        for i, session in enumerate(recent_sessions, 1):
+            result += f"{i}. '{session['task']}'\n"
+            result += f"   - Explored {session['query_count']} aspects\n"
+            result += f"   - Decision: {session['final_decision'].get('action_type', 'unknown')}\n"
+            
+            # Show environment state
+            if session['environment_state']:
+                env_info = []
+                if session['environment_state'].get('objects_detected'):
+                    env_info.append('objects detected')
+                if session['environment_state'].get('clickable_available'):
+                    env_info.append('interactive elements found')
+                if env_info:
+                    result += f"   - Environment: {', '.join(env_info)}\n"
+            
+            # Show key findings
+            if session['key_findings']:
+                top_finding = session['key_findings'][0]
+                result += f"   - Key Finding: {top_finding['result_preview'][:80]}...\n"
+            
+            result += "\n"
+        
+        result += "💡 PATTERNS: Look for repeated queries or decisions to avoid inefficient exploration."
+        return result
+
     def _format_clickable_objects_enhanced(self, detected_objects):
         """Enhanced clickable objects with action priority"""
         # More intelligent clickable detection
@@ -746,13 +890,50 @@ class Brain:
         result += f"Total text characters: {total_text_chars}\n"
         return result
     
+    def interactive_decision(self, step, task, state, detected_objects, pre_knowledge=None):
+        """Interactive decision making - wait for user input instead of AI decision"""
+        print(f"\n=== Interactive Decision Mode ===")
+        print(f"Task: {task}")
+        print(f"Step: {step}")
+        
+        # Display available objects for user selection
+        if detected_objects:
+            print("\nAvailable objects to interact with:")
+            for i, obj in enumerate(detected_objects):
+                print(f"{i+1}. ID: {obj.get('id', 'N/A')}, Type: {obj.get('type', 'unknown')}, ")
+                print(f"   Content: '{obj.get('content', '')[:50]}', Center: {obj.get('center', 'N/A')}")
+        else:
+            print("\nNo objects detected in current state.")
+        
+        # Return a special marker indicating user interaction is needed
+        return {
+            "action_type": "user_interaction_required",
+            "available_objects": detected_objects,
+            "task": task,
+            "step": step,
+            "state": state
+        }
+    
     def do_operation_mcp(self, step, task, state, detected_objects, pre_knowledge=None, max_iterations=None):
         """MCP-style operation with multi-turn interaction"""
         # Get max_iterations from config if not provided
         if max_iterations is None:
             max_iterations = self.max_mcp_iter
         
+        # Initialize conversation_context with relevant historical context
         conversation_context = []
+        
+        # Get relevant historical context from previous MCP sessions
+        historical_contexts = self._get_relevant_historical_context(task)
+        if historical_contexts:
+            # Add historical context as initial context
+            historical_summary = self._build_historical_context_summary(historical_contexts)
+            conversation_context.append({
+                'iteration': 0,
+                'query': {'query_type': 'historical_context', 'task': task},
+                'result': historical_summary
+            })
+            print(f"Initialized MCP with {len(historical_contexts)} relevant historical contexts")
         
         for iteration in range(max_iterations):
             print(f"MCP Iteration {iteration + 1}/{max_iterations}")
@@ -789,7 +970,8 @@ class Brain:
                 query_result = self.execute_environment_query(
                     function_input['query_type'],
                     detected_objects,
-                    function_input.get('object_id')
+                    function_input.get('object_id'),
+                    function_input.get('context_query')
                 )
                 
                 # Add to conversation context
@@ -805,6 +987,14 @@ class Brain:
             elif function_name == 'select_skill':
                 # Execute skill selection
                 print(f"MCP selected skill ID: {function_input['id']}")
+                
+                # Save conversation to history before returning
+                final_decision = {
+                    "action_type": "select_skill",
+                    "skill_id": int(function_input['id'])
+                }
+                self._save_conversation_to_history(conversation_context, task, final_decision)
+                
                 return {
                     "action_type": "select_skill",
                     "skill_id": int(function_input['id']),
@@ -814,10 +1004,44 @@ class Brain:
             elif function_name in ['Click', 'RightSingle', 'LeftDouble', 'Type', 'Drag', 'Finished']:
                 # Execute direct operation
                 print(f"MCP selected operation: {function_name}")
+                
+                # Try to find the corresponding object_id based on coordinates
+                selected_object_id = None
+                if 'x' in function_input and 'y' in function_input:
+                    target_x, target_y = function_input['x'], function_input['y']
+                    # Find the closest object to the selected coordinates
+                    min_distance = float('inf')
+                    closest_object = None
+                    
+                    for obj in detected_objects:
+                        if 'center' in obj and obj['center']:
+                            obj_x, obj_y = obj['center']
+                            distance = ((target_x - obj_x) ** 2 + (target_y - obj_y) ** 2) ** 0.5
+                            if distance < min_distance:
+                                min_distance = distance
+                                closest_object = obj
+                    
+                    # If we found a close object (within 50 pixels), use its ID
+                    if closest_object and min_distance <= 50:
+                        selected_object_id = closest_object.get('id')
+                        print(f"MCP matched operation to object ID: {selected_object_id} (distance: {min_distance:.1f})")
+                    else:
+                        print(f"MCP operation at ({target_x}, {target_y}) - no close object found (min distance: {min_distance:.1f})")
+                
+                # Save conversation to history before returning
+                final_decision = {
+                    "action_type": "direct_operation",
+                    "operate": function_name,
+                    "params": function_input,
+                    "object_id": selected_object_id
+                }
+                self._save_conversation_to_history(conversation_context, task, final_decision)
+                
                 return {
                     "action_type": "direct_operation",
                     "operate": function_name,
                     "params": function_input,
+                    "object_id": selected_object_id,
                     "conversation_context": conversation_context
                 }
             
@@ -844,10 +1068,21 @@ class Brain:
             
             print(f"Random exploration: {selected_operation} on object {selected_obj.get('id', 'unknown')} at {selected_obj['center']}")
             
+            # Save conversation to history before returning (fallback case)
+            final_decision = {
+                "action_type": "direct_operation",
+                "operate": selected_operation,
+                "params": {"coordinate": selected_obj['center']},
+                "object_id": selected_obj.get('id'),
+                "fallback_decision": True
+            }
+            self._save_conversation_to_history(conversation_context, task, final_decision)
+            
             return {
                 "action_type": "direct_operation",
                 "operate": selected_operation,
                 "params": {"coordinate": selected_obj['center']},
+                "object_id": selected_obj.get('id'),
                 "conversation_context": conversation_context,
                 "fallback_decision": True,
                 "selected_object": selected_obj
@@ -855,10 +1090,22 @@ class Brain:
         else:
             # Ultimate fallback if no objects detected
             print("No objects detected, using center screen click as last resort")
+            
+            # Save conversation to history before returning (ultimate fallback)
+            final_decision = {
+                "action_type": "direct_operation",
+                "operate": "Click",
+                "params": {"coordinate": [640, 360]},
+                "object_id": None,
+                "fallback_decision": True
+            }
+            self._save_conversation_to_history(conversation_context, task, final_decision)
+            
             return {
                 "action_type": "direct_operation",
                 "operate": "Click",
                 "params": {"coordinate": [640, 360]},
+                "object_id": None,
                 "conversation_context": conversation_context,
                 "fallback_decision": True,
                 "fallback_reason": "no_objects_detected"
@@ -913,6 +1160,150 @@ Analyze the current situation and choose the most appropriate action to complete
         
         return base_prompt
     
+    def _save_conversation_to_history(self, conversation_context, task, final_decision):
+        """Save valuable conversation context to persistent history"""
+        if not conversation_context:
+            return
+            
+        # Create a summary of this conversation session
+        session_summary = {
+            'task': task,
+            'timestamp': time.time(),
+            'query_count': len(conversation_context),
+            'final_decision': final_decision,
+            'key_findings': [],
+            'environment_state': {}
+        }
+        
+        # Extract key findings from conversation
+        for ctx in conversation_context:
+            query_type = ctx['query'].get('query_type', 'unknown')
+            result_preview = ctx['result'][:200] if len(ctx['result']) > 200 else ctx['result']
+            
+            session_summary['key_findings'].append({
+                'query_type': query_type,
+                'result_preview': result_preview,
+                'iteration': ctx['iteration']
+            })
+            
+            # Store environment state information
+            if query_type == 'all_objects' and 'objects' in ctx['result']:
+                session_summary['environment_state']['objects_detected'] = True
+            elif query_type == 'clickable_objects':
+                session_summary['environment_state']['clickable_available'] = True
+        
+        # Add to history and maintain size limit
+        self.mcp_conversation_history.append(session_summary)
+        if len(self.mcp_conversation_history) > self.max_history_length:
+            self.mcp_conversation_history.pop(0)  # Remove oldest entry
+        
+        print(f"💾 Saved MCP session to history: {len(conversation_context)} interactions, decision: {final_decision.get('action_type', 'unknown')}")
+    
+    def _get_relevant_historical_context(self, current_task, max_contexts=3):
+        """Retrieve relevant historical context for current task"""
+        if not self.mcp_conversation_history:
+            return []
+        
+        # Simple relevance scoring based on task similarity and recency
+        scored_contexts = []
+        current_time = time.time()
+        
+        for i, session in enumerate(self.mcp_conversation_history):
+            # Recency score (more recent = higher score)
+            recency_score = 1.0 / (1.0 + (current_time - session['timestamp']) / 3600)  # Decay over hours
+            
+            # Task similarity score (simple keyword matching)
+            task_similarity = 0.5  # Default moderate similarity
+            if session['task'].lower() in current_task.lower() or current_task.lower() in session['task'].lower():
+                task_similarity = 1.0
+            
+            # Quality score based on number of findings
+            quality_score = min(1.0, len(session['key_findings']) / 5.0)  # Normalize to 0-1
+            
+            total_score = (recency_score * 0.4 + task_similarity * 0.4 + quality_score * 0.2)
+            scored_contexts.append((total_score, session, i))
+        
+        # Sort by score and return top contexts
+        scored_contexts.sort(key=lambda x: x[0], reverse=True)
+        return [ctx[1] for ctx in scored_contexts[:max_contexts]]
+    
+    def _build_historical_context_summary(self, historical_contexts):
+        """Build a concise summary from historical contexts"""
+        if not historical_contexts:
+            return ""
+        
+        summary = "\n🕒 RELEVANT HISTORICAL CONTEXT:\n"
+        
+        for i, ctx in enumerate(historical_contexts, 1):
+            summary += f"\n{i}. Previous Task: '{ctx['task']}'\n"
+            summary += f"   - Explored {ctx['query_count']} aspects of environment\n"
+            
+            if ctx['final_decision']:
+                action_type = ctx['final_decision'].get('action_type', 'unknown')
+                summary += f"   - Final Decision: {action_type}\n"
+            
+            # Add key environment findings
+            if ctx['environment_state']:
+                env_info = []
+                if ctx['environment_state'].get('objects_detected'):
+                    env_info.append('objects detected')
+                if ctx['environment_state'].get('clickable_available'):
+                    env_info.append('clickable elements found')
+                if env_info:
+                    summary += f"   - Environment: {', '.join(env_info)}\n"
+            
+            # Add most relevant findings
+            if ctx['key_findings']:
+                top_findings = ctx['key_findings'][:2]  # Show top 2 findings
+                for finding in top_findings:
+                    summary += f"   - Found: {finding['result_preview'][:100]}...\n"
+        
+        summary += "\n💡 Use this context to avoid redundant exploration and make informed decisions.\n"
+        return summary
+    
+    def enhance_pre_knowledge_with_history(self, base_pre_knowledge, task):
+        """Enhance pre_knowledge with relevant historical MCP findings"""
+        enhanced_knowledge = base_pre_knowledge
+        
+        # Get relevant historical contexts
+        historical_contexts = self._get_relevant_historical_context(task, max_contexts=2)
+        
+        if historical_contexts:
+            enhanced_knowledge += "\n\n=== HISTORICAL INSIGHTS ==="
+            
+            # Extract key findings from historical contexts
+            key_findings = set()
+            environment_patterns = set()
+            
+            for context in historical_contexts:
+                # Extract key findings
+                if 'key_findings' in context and context['key_findings']:
+                    for finding in context['key_findings']:
+                        if len(finding) > 10:  # Filter out very short findings
+                            key_findings.add(finding)
+                
+                # Extract environment patterns
+                if 'environment_state' in context and context['environment_state']:
+                    env_state = context['environment_state']
+                    if isinstance(env_state, str) and len(env_state) > 20:
+                        environment_patterns.add(env_state[:200])  # Limit length
+            
+            # Add key findings to enhanced knowledge
+            if key_findings:
+                enhanced_knowledge += "\n\nKey Findings from Previous Sessions:"
+                for i, finding in enumerate(list(key_findings)[:3], 1):  # Limit to top 3
+                    enhanced_knowledge += f"\n{i}. {finding}"
+            
+            # Add environment patterns
+            if environment_patterns:
+                enhanced_knowledge += "\n\nEnvironment Patterns Observed:"
+                for i, pattern in enumerate(list(environment_patterns)[:2], 1):  # Limit to top 2
+                    enhanced_knowledge += f"\n{i}. {pattern}"
+            
+            enhanced_knowledge += "\n\nNote: Use these insights to make more informed decisions and avoid repeating unsuccessful approaches."
+        
+        return enhanced_knowledge
+    
     def _analyze_conversation_context(self, conversation_context):
         """Analyze conversation context to provide intelligent guidance"""
         if not conversation_context:
@@ -922,8 +1313,24 @@ Analyze the current situation and choose the most appropriate action to complete
                 'context_summary': ''
             }
         
-        # Analyze query patterns
-        query_types = [ctx['query'].get('query_type', 'unknown') for ctx in conversation_context]
+        # Check if we have historical context as the first entry
+        has_historical_context = (len(conversation_context) > 0 and 
+                                conversation_context[0]['query'].get('query_type') == 'historical_context')
+        
+        # Filter out historical context for pattern analysis (focus on current session queries)
+        current_session_context = conversation_context[1:] if has_historical_context else conversation_context
+        
+        # If only historical context exists, provide enhanced guidance
+        if has_historical_context and not current_session_context:
+            return {
+                'status_summary': '- Initialized with historical insights from previous sessions',
+                'decision_guidance': 'You have valuable historical context. Use these insights to make informed decisions and avoid repeating unsuccessful approaches. Start with targeted queries based on historical patterns.',
+                'context_summary': conversation_context[0]['result'][:300] + '...' if len(conversation_context[0]['result']) > 300 else conversation_context[0]['result']
+            }
+        
+        # Analyze query patterns (use current session context for pattern analysis)
+        analysis_context = current_session_context if current_session_context else conversation_context
+        query_types = [ctx['query'].get('query_type', 'unknown') for ctx in analysis_context]
         query_counts = {}
         for qt in query_types:
             query_counts[qt] = query_counts.get(qt, 0) + 1
@@ -933,7 +1340,10 @@ Analyze the current situation and choose the most appropriate action to complete
         last_3_queries = query_types[-3:] if len(query_types) >= 3 else query_types
         
         # Generate status summary
-        status_summary = f"- Query pattern: {dict(query_counts)}"
+        status_summary = ""
+        if has_historical_context:
+            status_summary += "- Enhanced with historical insights\n"
+        status_summary += f"- Current session queries: {dict(query_counts)}"
         if repeated_queries:
             status_summary += f"\n- ⚠️ REPETITIVE: {repeated_queries} (stop repeating!)"
         
@@ -945,16 +1355,29 @@ Analyze the current situation and choose the most appropriate action to complete
         if len(set(last_3_queries)) == 1:
             decision_guidance += "🚨 Last 3 queries were identical. Break the loop - try a different approach or make a decision!\n"
         
-        if len(conversation_context) > 4:
+        # Adjust thresholds based on whether we have historical context
+        exploration_threshold = 3 if has_historical_context else 4
+        if len(analysis_context) > exploration_threshold:
             decision_guidance += "⏰ You've explored enough. Time to make a decision based on available information.\n"
         
-        if not decision_guidance:
+        # Add historical context guidance
+        if has_historical_context and not decision_guidance:
+            decision_guidance = "Leverage historical insights to make informed decisions. Focus on targeted exploration based on past learnings."
+        elif not decision_guidance:
             decision_guidance = "Continue strategic exploration, but be ready to act when you have enough information."
         
         # Generate condensed context summary
         context_summary = ""
+        
+        # Include historical context summary if available
+        if has_historical_context:
+            historical_summary = conversation_context[0]['result'][:200]
+            context_summary += f"📚 Historical Context: {historical_summary}...\n\n"
+        
+        # Add current session context
         unique_results = set()
-        for ctx in conversation_context[-5:]:  # Last 5 interactions only
+        context_to_summarize = analysis_context[-4:] if analysis_context else []  # Last 4 current session interactions
+        for ctx in context_to_summarize:
             result_key = ctx['result'][:100]  # First 100 chars as key
             if result_key not in unique_results:
                 unique_results.add(result_key)

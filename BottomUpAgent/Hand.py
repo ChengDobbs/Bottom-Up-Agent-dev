@@ -5,17 +5,36 @@ import time
 
 class Hand:
     def __init__(self, config):
-
+        # Get screen dimensions for boundary checking
+        self.screen_width, self.screen_height = pyautogui.size()
+        # Set fail-safe to False to prevent corner trigger (use with caution)
+        pyautogui.FAILSAFE = False
+        
         self.game_name = config['game_name']
         print(f"Hand initialized for game {self.game_name}")
+        print(f"Screen size: {self.screen_width}x{self.screen_height}")
+        print("PyAutoGUI fail-safe disabled - using boundary checking instead")
         
+    def _safe_coordinates(self, x, y):
+        """Ensure coordinates are within safe bounds, avoiding screen corners."""
+        # Define safe margins (avoid corners and edges)
+        margin = 10
+        safe_x = max(margin, min(x, self.screen_width - margin))
+        safe_y = max(margin, min(y, self.screen_height - margin))
+        
+        if safe_x != x or safe_y != y:
+            print(f"Adjusted coordinates from ({x}, {y}) to ({safe_x}, {safe_y}) for safety")
+        
+        return safe_x, safe_y
 
     def move(self, x, y, duration=0.5):
-        pyautogui.moveTo(x, y, duration)
+        safe_x, safe_y = self._safe_coordinates(x, y)
+        pyautogui.moveTo(safe_x, safe_y, duration)
 
     def left_single_click(self, x, y):
         """Perform a left mouse click at the specified coordinates."""
-        pyautogui.moveTo(x, y, duration=0.05)
+        safe_x, safe_y = self._safe_coordinates(x, y)
+        pyautogui.moveTo(safe_x, safe_y, duration=0.05)
         time.sleep(0.05)  # Ensure mouse reaches position
         pyautogui.mouseDown(button='left')
         time.sleep(0.05)  # Ensure click is registered
@@ -23,7 +42,8 @@ class Hand:
 
     def right_single_click(self, x, y):
         """Perform a right mouse click at the specified coordinates."""
-        pyautogui.moveTo(x, y, duration=0.05)
+        safe_x, safe_y = self._safe_coordinates(x, y)
+        pyautogui.moveTo(safe_x, safe_y, duration=0.05)
         time.sleep(0.05)  # Ensure mouse reaches position
         pyautogui.mouseDown(button='right')
         time.sleep(0.05)  # Ensure click is registered
@@ -53,15 +73,22 @@ class Hand:
             y1 = params["y1"] + top
             x2 = params["x2"] + left
             y2 = params["y2"] + top
+            
+            # Apply safe coordinate checking
+            safe_x1, safe_y1 = self._safe_coordinates(x1, y1)
+            safe_x2, safe_y2 = self._safe_coordinates(x2, y2)
+            
             # Move to start position
-            pyautogui.moveTo(x1, y1, duration=0.05)
+            pyautogui.moveTo(safe_x1, safe_y1, duration=0.05)
             time.sleep(0.1)  # Ensure mouse reaches position
             pyautogui.mouseDown(button='left')
             time.sleep(0.05)  # Ensure click is registered
-            pyautogui.moveTo(x2, y2, duration=0.2)
+            pyautogui.moveTo(safe_x2, safe_y2, duration=0.2)
             # Release left mouse button
             pyautogui.mouseUp(button='left')
-            print(f"Dragged from ({x1}, {y1}) to ({x2}, {y2})")
+            print(f"Dragged from ({safe_x1}, {safe_y1}) to ({safe_x2}, {safe_y2})")
+            if (safe_x1, safe_y1) != (x1, y1) or (safe_x2, safe_y2) != (x2, y2):
+                print(f"Original coordinates: ({x1}, {y1}) to ({x2}, {y2})")
             
         elif operate == "Scroll":
             x = params["x"] + left
@@ -96,24 +123,33 @@ class Hand:
         elif operate == "LeftDouble":
             x = params["x"] + left
             y = params["y"] + top
-            pyautogui.doubleClick(x, y)
-            print(f"Double clicked at ({x}, {y})")
+            safe_x, safe_y = self._safe_coordinates(x, y)
+            pyautogui.doubleClick(safe_x, safe_y)
+            print(f"Double clicked at ({safe_x}, {safe_y})")
+            if (safe_x, safe_y) != (x, y):
+                print(f"Original coordinates: ({x}, {y})")
             
         elif operate == "RightSingle":
             x = params["x"] + left
             y = params["y"] + top
-            pyautogui.click(x, y, button='right')
-            print(f"Right clicked at ({x}, {y})")
+            safe_x, safe_y = self._safe_coordinates(x, y)
+            pyautogui.click(safe_x, safe_y, button='right')
+            print(f"Right clicked at ({safe_x}, {safe_y})")
+            if (safe_x, safe_y) != (x, y):
+                print(f"Original coordinates: ({x}, {y})")
             
         elif operate == "LongPress":
             # TODO: higher requests need to specify duration
             x = params["x"] + left
             y = params["y"] + top
-            pyautogui.moveTo(x, y, duration=0.5)
+            safe_x, safe_y = self._safe_coordinates(x, y)
+            pyautogui.moveTo(safe_x, safe_y, duration=0.5)
             pyautogui.mouseDown(button='left')  # Specify left button
             time.sleep(1)  # Long press duration
             pyautogui.mouseUp(button='left')  # Specify left button
-            print(f"Long pressed at ({x}, {y}) for 1 second")
+            print(f"Long pressed at ({safe_x}, {safe_y}) for 1 second")
+            if (safe_x, safe_y) != (x, y):
+                print(f"Original coordinates: ({x}, {y})")
             
         elif operate == "PressBack":
             pyautogui.press('backspace')

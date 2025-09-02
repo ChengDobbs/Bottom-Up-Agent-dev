@@ -8,14 +8,22 @@ import cv2
 import numpy as np
 # %matplotlib inline
 from matplotlib import pyplot as plt
-from paddleocr import PaddleOCR
-paddle_ocr = PaddleOCR(
-    lang="en",
-    ocr_version="PP-OCRv5",
-    use_doc_orientation_classify=False, # Use use_doc_orientation_classify to enable/disable document orientation classification model
-    use_doc_unwarping=False, # Use use_doc_unwarping to enable/disable document unwarping module
-    use_textline_orientation=True, # Use use_textline_orientation to enable/disable textline orientation classification model
-)
+# PaddleOCR will be initialized lazily when first used
+paddle_ocr = None
+
+def get_paddle_ocr():
+    """Lazy initialization of PaddleOCR to avoid early loading"""
+    global paddle_ocr
+    if paddle_ocr is None:
+        from paddleocr import PaddleOCR
+        paddle_ocr = PaddleOCR(
+            lang="en",
+            ocr_version="PP-OCRv5",
+            use_doc_orientation_classify=False, # Use use_doc_orientation_classify to enable/disable document orientation classification model
+            use_doc_unwarping=False, # Use use_doc_unwarping to enable/disable document unwarping module
+            use_textline_orientation=True, # Use use_textline_orientation to enable/disable textline orientation classification model
+        )
+    return paddle_ocr
 import time
 import base64
 
@@ -526,7 +534,7 @@ def check_ocr_box(image_source: Union[str, Image.Image], display_img = True, out
     image_np = np.array(image_source)
     w, h = image_source.size
     if use_paddleocr:
-        result = paddle_ocr.predict(image_np, text_det_thresh=0.3, text_det_box_thresh=0.45, text_det_unclip_ratio=1.5)[0]
+        result = get_paddle_ocr().predict(image_np, text_det_thresh=0.3, text_det_box_thresh=0.45, text_det_unclip_ratio=1.5)[0]
         rec_polys, rec_scores, rec_texts = result["rec_polys"], result["rec_scores"], result["rec_texts"]
         coord = [rec_polys[i].tolist() for i, score in enumerate(rec_scores) if score > text_threshold]
         text = [rec_texts[i] for i, score in enumerate(rec_scores) if score > text_threshold]

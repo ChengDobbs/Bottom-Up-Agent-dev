@@ -7,6 +7,8 @@ from utils.utils import cv_to_base64
 import clip
 from PIL import Image
 from typing import List, Dict
+import os
+import pathlib
 
 class CLIP:
     def __init__(self, model_name: str = "ViT-B/32", use_gpu: bool = True):
@@ -65,6 +67,13 @@ class Detector:
                 iou_threshold=omni_config['iou_threshold'],
                 text_overlap_threshold=omni_config['text_overlap_threshold'],
             )
+        elif self.detector_type == 'template':
+            # Initialize template matching detector
+            template_config = config['detector']['template']
+            self.assets_path = template_config.get('assets_path', '')
+            self.grid_size = template_config.get('grid_size', [9, 9])
+            self.template_threshold = template_config.get('threshold', 0.8)
+            self.templates = self._load_templates()
         
         self.area_threshold = 0.03
 
@@ -158,10 +167,14 @@ class Detector:
         if not historical_objects:
             return new_objects
         
+        # CRITICAL FIX: Use objects_rematch to assign IDs to new objects based on historical objects
+        self.objects_rematch(new_objects, historical_objects)
+        print(f"Applied object ID matching: {len(new_objects)} new objects matched against {len(historical_objects)} historical objects")
+        
         # Create a comprehensive object list that includes both new and relevant historical objects
         comprehensive_objects = []
         
-        # Add all new objects
+        # Add all new objects (now with proper IDs from matching)
         for obj in new_objects:
             comprehensive_objects.append(obj)
         
@@ -191,11 +204,16 @@ class Detector:
             if matched_new_obj:
                 hist_obj_copy['source'] = 'historical_matched'
                 hist_obj_copy['matched_new_id'] = matched_new_obj.get('id')
+                # Log successful ID assignment
+                if matched_new_obj.get('id'):
+                    print(f"Historical object {hist_obj.get('id')} matched with new object ID: {matched_new_obj.get('id')}")
             else:
                 hist_obj_copy['source'] = 'historical_unique'
             comprehensive_objects.append(hist_obj_copy)
         
-        print(f"Comprehensive objects: {len(new_objects)} new + {len(comprehensive_objects) - len(new_objects)} historical = {len(comprehensive_objects)} total")
+        # Count objects with valid IDs for debugging
+        objects_with_ids = sum(1 for obj in comprehensive_objects if obj.get('id') is not None)
+        print(f"Comprehensive objects: {len(new_objects)} new + {len(comprehensive_objects) - len(new_objects)} historical = {len(comprehensive_objects)} total, {objects_with_ids} with valid IDs")
         return comprehensive_objects
 
     def extract_objects_omni(self, image: np.ndarray, get_parsed_img = False) -> List[Dict]:

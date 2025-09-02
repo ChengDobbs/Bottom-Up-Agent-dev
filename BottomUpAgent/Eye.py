@@ -96,6 +96,53 @@ class Eye:
         else:
             print(f"Unsupported platform: {self.platform}")
             return None
+    
+    def list_all_windows(self):
+        """List all visible windows for debugging purposes"""
+        if self.platform == 'windows' and WINDOWS_AVAILABLE:
+            return self._list_windows_windows()
+        elif self.platform == 'linux' and XLIB_AVAILABLE:
+            return self._list_windows_linux()
+        else:
+            return []
+    
+    def _list_windows_windows(self):
+        """List all windows on Windows"""
+        windows = []
+        def enum_windows_proc(hwnd, lParam):
+            if win32gui.IsWindowVisible(hwnd):
+                window_text = win32gui.GetWindowText(hwnd)
+                if window_text:
+                    windows.append(window_text)
+            return True
+        
+        try:
+            win32gui.EnumWindows(enum_windows_proc, 0)
+        except Exception as e:
+            print(f"Error listing windows: {e}")
+        return windows
+    
+    def _list_windows_linux(self):
+        """List all windows on Linux"""
+        windows = []
+        try:
+            if self.display:
+                root = self.display.screen().root
+                window_ids = root.get_full_property(self.display.intern_atom('_NET_CLIENT_LIST'), Xlib.X.AnyPropertyType).value
+                
+                for window_id in window_ids:
+                    window = self.display.create_resource_object('window', window_id)
+                    try:
+                        window_title = window.get_full_property(self.display.intern_atom('_NET_WM_NAME'), Xlib.X.AnyPropertyType)
+                        if window_title and window_title.value:
+                            title = window_title.value.decode('utf-8', errors='ignore')
+                            if title:
+                                windows.append(title)
+                    except Exception:
+                        continue
+        except Exception as e:
+            print(f"Error listing windows: {e}")
+        return windows
 
     def get_screenshot_cv(self):
         if not self.window_name:

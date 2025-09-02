@@ -134,18 +134,24 @@ Download the licensed Slay and Spire, Civilization V from Steam, then launch the
 For Slay the Spire, select `Play Slay the Spire` option.
 For Civilization V, select `Play Sid Meier's Civilization V (DirectX 9)` option.
 
-## Screen settings
+### Game screen settings
 Please adjust the in-game resolution to match the `width` and `height` specified under the `eye` attribute in your `config/*.yaml` configuration files. This ensures the agent observes the window correctly.
 | Slay the Spire | Civilization V |
 |------------|------------|
 | ![Slay the Spire](figs/sts_resolution.jpg) | ![Civilization V](figs/c5_resolution.jpg) |
 
+## Launch the Crafter
+```bash
+python -m pip install pygame gymnasium crafter
+python -m demos.crafter_interactive_launcher --resolution 400 --max-steps 1_000_000
+```
 
 ## Run on Games
 ### Slay the Spire
 ```bash
 python -m run --config_file "config/sts_explore_claude.yaml"
 python -m run --config_file "config/sts_omni_claude.yaml"
+python -m run --config_file "config/sts_vector_mcp_claude.yaml"
 ```
 
 ### Civilization V

@@ -2,6 +2,7 @@ screenshot.png
 */__pycache__/
 __pycache__
 logs/
+tests/
 test/
 */screenshots/
 *.db
@@ -12,4 +13,4 @@ base_model/.env
 wandb/
 results/
 debug/
-Slay the Spire/objects_no_use
+docs/
