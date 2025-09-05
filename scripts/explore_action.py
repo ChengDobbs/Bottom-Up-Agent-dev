@@ -5,7 +5,7 @@ from BottomUpAgent.Detector import Detector
 from BottomUpAgent.Brain import Brain
 from BottomUpAgent.Eye import Eye
 from BottomUpAgent.Mcts import MCST
-from BottomUpAgent.BottomUpAgent import SuperGamer
+from BottomUpAgent.BottomUpAgent import BottomUpAgent
 
 
 
@@ -14,7 +14,7 @@ def explore_action(config, action_id):
     brain = Brain(config)
     detector = Detector(config)
 
-    sup = SuperGamer(config)
+    sup = BottomUpAgent(config)
 
     screen = eye.get_screenshot_cv()
     state_feature = detector.encode_image(screen)

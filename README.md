@@ -143,7 +143,7 @@ Please adjust the in-game resolution to match the `width` and `height` specified
 ## Launch the Crafter
 ```bash
 python -m pip install pygame gymnasium crafter
-python -m demos.crafter_interactive_launcher --resolution 400 --max-steps 1_000_000
+python -m demos.crafter_interactive_launcher --max-steps 1_000_000
 ```
 
 ## Run on Games

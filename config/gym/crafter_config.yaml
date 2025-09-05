@@ -20,11 +20,23 @@ brain:
   uct_c: 5.0
   uct_threshold: 0.0
 
+# GUI Configuration (unified with crafter_interactive_launcher)
+gui:
+  resolution: low               # Use crafter_interactive_launcher preset: tiny/small/low/medium/high/ultra
+  width: 384                    # Explicit width override (optional)
+  height: 384                   # Explicit height override (optional) 
+  fps: 30                       # Frames per second
+  title: "Crafter"
+  resizable: false
+  fullscreen: false
+  fps_limit: 60
+  vsync: true
+  
 # Gym Environment Configuration
 gym:
   env_type: "crafter_direct"    # Use direct Crafter.Env() creation
   env_id: "CrafterReward-v1"    # Identifier for logging
-  render_mode: "human"           # For GUI display
+  render_mode: "rgb_array"       # Use rgb_array to avoid Crafter's native window
   max_episode_steps: 10000      # Long episodes for exploration
   
   # Action and observation spaces (Crafter specific)
@@ -115,7 +127,7 @@ vector_memory:
 
 # Detector configuration
 detector:
-  type: 'omni'  # Options: 'sam', 'omni', 'template'
+  type: 'crafter_api'  # Options: 'sam', 'omni', 'template', 'crafter_api'
   clip_model: 'ViT-B/32'
   
   omni:
@@ -133,6 +145,32 @@ detector:
     threshold: 0.8     # Template matching threshold (0.0-1.0)
     # For Crafter: 7x9 main view + 2 rows for inventory
     # Main game area: 7 rows, Inventory area: 2 rows
+  
+  # Crafter API detector configuration (for structured game state)
+  crafter_api:
+    grid_size: [7, 9]  # Grid dimensions [rows, cols] - 7x9 main view
+    inventory_size: [2, 9]  # Inventory grid size (width, height)
+    unit_size: 64  # Size of each grid cell in pixels
+    enable_semantic_view: true  # Include all world objects in detection
+    
+    # Detection method selection
+    detection_method: 'direct_api'  # Options: 'similarity_matching', 'direct_api', 'hybrid'
+    
+    # Similarity matching configuration
+    similarity_matching:
+      enabled: true
+      template_source: 'crafter_assets'  # Use crafter asset templates
+      similarity_threshold: 0.8  # Minimum similarity score (0.0-1.0)
+      use_color_analysis: true   # Enable RGB color analysis as fallback
+      cache_templates: true      # Cache loaded templates for performance
+      
+    # Direct API configuration  
+    direct_api:
+      enabled: true
+      use_world_state: true      # Access world._world for material info
+      use_player_state: true     # Access player inventory and position
+      include_objects: true      # Include dynamic objects (creatures, items)
+      fallback_to_similarity: true  # Use similarity matching if API fails
 
 # Database path configuration
 database:
@@ -163,36 +201,8 @@ experimental:
 
 # Display configuration for crafter rendering
 eye:
-  width: 1200
-  height: 1200
-
-# GUI window configuration
-gui:
-  # Window dimensions
-  width: 1200
-  height: 1200
-  
-  # Resolution presets (can override width/height)
-  resolution_preset: "high"  # Options: tiny, small, low, medium, high, ultra
-  
-  # Custom resolution mapping
-  resolution_presets:
-    tiny: [200, 200]
-    small: [300, 300]
-    low: [400, 400]
-    medium: [600, 600]
-    high: [800, 800]
-    ultra: [1200, 1200]
-  
-  # Window properties
-  resizable: false
-  fullscreen: false
-  title: "Gym Environment: CrafterReward-v1"
-  
-  # Rendering settings
-  fps_limit: 60
-  vsync: true
-  anti_aliasing: true
+  width: 400
+  height: 400
 
 # Crafter recording configuration
 recording:

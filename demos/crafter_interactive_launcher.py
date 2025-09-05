@@ -208,7 +208,15 @@ def input_thread_worker(input_queue, stop_event):
     
     while not stop_event.is_set():
         try:
+            # Check stop_event before blocking on input
+            if stop_event.is_set():
+                break
+                
             user_input = input("Enter action: ")
+            
+            # Check stop_event again after input
+            if stop_event.is_set():
+                break
             
             # Handle space key specially (before stripping)
             if user_input == ' ':
@@ -245,10 +253,24 @@ def input_thread_worker(input_queue, stop_event):
             input_queue.put(user_input.lower())
             break
         except EOFError:
-            break
-        except KeyboardInterrupt:
+            # Handle end of input (Ctrl+D on Unix, Ctrl+Z on Windows)
             input_queue.put('q')
             break
+        except KeyboardInterrupt:
+            # Handle Ctrl+C
+            input_queue.put('q')
+            break
+        except Exception as e:
+            # Handle any other exceptions during input
+            print(f"Input thread exception: {e}")
+            input_queue.put('q')
+            break
+    
+    # Thread is terminating - put a quit signal to ensure main loop exits
+    try:
+        input_queue.put('q')
+    except:
+        pass  # Queue might be closed
 
 def get_gui_config(config, resolution_override=None):
     """
@@ -282,7 +304,8 @@ def get_gui_config(config, resolution_override=None):
                 width = gui_config.get('width', default_width)
                 height = gui_config.get('height', default_height)
     else:
-        preset = gui_config.get('resolution_preset', 'high')
+        # Check both 'resolution' and 'resolution_preset' for compatibility
+        preset = gui_config.get('resolution', gui_config.get('resolution_preset', 'low'))
         if preset in presets:
             width, height = presets[preset]
         else:
@@ -299,13 +322,25 @@ def get_gui_config(config, resolution_override=None):
         'vsync': gui_config.get('vsync', True)
     }
 
-def demo_crafter_interactive(resolution='high', max_steps=10, config_path=None):
-    """Run interactive Crafter demo with GUI"""
-    print("🎮 Crafter Interactive Demo with GUI Rendering")
+def demo_crafter_interactive(resolution='low', max_steps=10, config_path=None, no_gui=False):
+    """Run interactive Crafter demo with optional GUI"""
+    if no_gui:
+        print("🎮 Crafter Interactive Demo - Background Mode (No GUI)")
+    else:
+        print("🎮 Crafter Interactive Demo with GUI Rendering")
     print("=" * 50)
     
     # Load configuration
     config = load_config(config_path) if config_path else load_config()
+    
+    # Use config file resolution if available, otherwise use parameter
+    config_resolution = config.get('gui', {}).get('resolution')
+    if config_resolution:
+        resolution = config_resolution
+        print(f"📋 Using resolution from config: {resolution}")
+    else:
+        print(f"📋 Using parameter resolution: {resolution}")
+    
     gui_config = get_gui_config(config, resolution)
     
     window_size = (gui_config['width'], gui_config['height'])
@@ -315,13 +350,19 @@ def demo_crafter_interactive(resolution='high', max_steps=10, config_path=None):
     env = crafter.Env()
     print("✅ Crafter environment created")
     
-    # Initialize pygame for GUI
-    pygame.init()
-    screen = pygame.display.set_mode(window_size)
-    resolution_display = resolution.upper() if not resolution.isdigit() else f"{resolution}x{resolution}"
-    pygame.display.set_caption(f"Crafter Interactive Demo [{resolution_display}]")
-    clock = pygame.time.Clock()
-    print(f"✅ Pygame GUI window initialized ({window_size[0]}x{window_size[1]}) - {resolution_display} Resolution Mode")
+    # Initialize pygame for GUI only if not in no-gui mode
+    screen = None
+    clock = None
+    if not no_gui:
+        pygame.init()
+        screen = pygame.display.set_mode(window_size)
+        # Always display actual pixel dimensions in title, regardless of preset name
+        resolution_display = f"{window_size[0]}x{window_size[1]}"
+        pygame.display.set_caption(f"Crafter Interactive Demo [{resolution_display}]")
+        clock = pygame.time.Clock()
+        print(f"✅ Pygame GUI window initialized ({window_size[0]}x{window_size[1]}) - {resolution_display} Resolution Mode")
+    else:
+        print("✅ Running in background mode - no GUI window created")
     
     # Initialize tracking variables
     achievements_history = []  # Store achievements for each episode
@@ -380,48 +421,58 @@ def demo_crafter_interactive(resolution='high', max_steps=10, config_path=None):
         print(f"\n--- Episode {episode_count}, Step {episode_steps} (Global: {total_steps}) ---")
         print(f"Episode reward: {episode_reward:.2f}, Total reward: {total_reward:.2f}")
         
-        # Handle pygame events and keyboard input
+        # Handle pygame events and keyboard input (only if GUI is enabled)
         keyboard_action = None
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                print("GUI window closed, ending demo...")
-                running = False
-                break
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    print("ESC pressed, ending demo...")
+        if not no_gui and screen is not None:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    print("GUI window closed, ending demo...")
                     running = False
                     break
-                elif event.key in KEYBOARD_MAPPING:
-                    keyboard_action = KEYBOARD_MAPPING[event.key]
-                    action_name = CRAFTER_ACTIONS[keyboard_action]
-                    print(f"🎮 Keyboard input: {pygame.key.name(event.key).upper()} -> Action {keyboard_action} ({action_name})")
-                    break
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        print("ESC pressed, ending demo...")
+                        running = False
+                        break
+                    elif event.key in KEYBOARD_MAPPING:
+                        keyboard_action = KEYBOARD_MAPPING[event.key]
+                        action_name = CRAFTER_ACTIONS[keyboard_action]
+                        print(f"🎮 Keyboard input: {pygame.key.name(event.key).upper()} -> Action {keyboard_action} ({action_name})")
+                        break
         
         if not running:
             break
         
-        # Render environment to GUI
-        try:
-            # Render at high resolution if possible
-            frame = env.render(render_size)
-            if frame is not None and len(frame.shape) == 3:
-                current_window_size = screen.get_size()
-                
-                # Only resize if necessary, using high-quality resampling
-                if frame.shape[:2] != current_window_size:
-                    image = Image.fromarray(frame)
-                    # Use LANCZOS for better quality when scaling
-                    image = image.resize(current_window_size, resample=Image.LANCZOS)
-                    frame = np.array(image)
-                
-                # Convert to pygame surface and display
-                surface = pygame.surfarray.make_surface(frame.transpose((1, 0, 2)))
-                screen.blit(surface, (0, 0))
-                pygame.display.flip()
-                print(f"🖼️  GUI updated with current game state ({frame.shape})")
-        except Exception as e:
-            print(f"Render error: {e}")
+        # Render environment to GUI (only if GUI is enabled)
+        if not no_gui and screen is not None:
+            try:
+                # Render at high resolution if possible
+                frame = env.render(render_size)
+                if frame is not None and len(frame.shape) == 3:
+                    current_window_size = screen.get_size()
+                    
+                    # Only resize if necessary, using high-quality resampling
+                    if frame.shape[:2] != current_window_size:
+                        image = Image.fromarray(frame)
+                        # Use LANCZOS for better quality when scaling
+                        image = image.resize(current_window_size, resample=Image.LANCZOS)
+                        frame = np.array(image)
+                    
+                    # Convert to pygame surface and display
+                    surface = pygame.surfarray.make_surface(frame.transpose((1, 0, 2)))
+                    screen.blit(surface, (0, 0))
+                    pygame.display.flip()
+                    print(f"🖼️  GUI updated with current game state ({frame.shape})")
+            except Exception as e:
+                print(f"Render error: {e}")
+        else:
+            # In no-gui mode, just get the frame data without displaying
+            try:
+                frame = env.render('rgb_array')
+                if frame is not None:
+                    print(f"🖼️  Frame data captured ({frame.shape}) - Background mode")
+            except Exception as e:
+                print(f"Frame capture error: {e}")
         
         # Use keyboard action if available, otherwise get console input
         if keyboard_action is not None:
@@ -489,25 +540,26 @@ def demo_crafter_interactive(resolution='high', max_steps=10, config_path=None):
                         input_thread.start()
                         
             except queue.Empty:
-                # Handle pygame events while waiting for input
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        print("GUI window closed, ending demo...")
-                        running = False
-                        stop_event.set()
-                        break
-                    elif event.type == pygame.KEYDOWN:
-                        if event.key == pygame.K_ESCAPE:
-                            print("ESC pressed, ending demo...")
+                # Handle pygame events while waiting for input (only if GUI is enabled)
+                if not no_gui and screen is not None:
+                    for event in pygame.event.get():
+                        if event.type == pygame.QUIT:
+                            print("GUI window closed, ending demo...")
                             running = False
                             stop_event.set()
                             break
-                        elif event.key in KEYBOARD_MAPPING:
-                            action = KEYBOARD_MAPPING[event.key]
-                            action_name = CRAFTER_ACTIONS[action]
-                            print(f"🎮 Keyboard input: {pygame.key.name(event.key).upper()} -> Action {action} ({action_name})")
-                            stop_event.set()
-                            break
+                        elif event.type == pygame.KEYDOWN:
+                            if event.key == pygame.K_ESCAPE:
+                                print("ESC pressed, ending demo...")
+                                running = False
+                                stop_event.set()
+                                break
+                            elif event.key in KEYBOARD_MAPPING:
+                                action = KEYBOARD_MAPPING[event.key]
+                                action_name = CRAFTER_ACTIONS[action]
+                                print(f"🎮 Keyboard input: {pygame.key.name(event.key).upper()} -> Action {action} ({action_name})")
+                                stop_event.set()
+                                break
                 
                 if not running:
                     break
@@ -563,12 +615,32 @@ def demo_crafter_interactive(resolution='high', max_steps=10, config_path=None):
                 episode_reward = 0.0
                 episode_steps = 0
                 print(f"\n🎬 Starting Episode {episode_count}")
+        except KeyboardInterrupt:
+            print("\n🛑 Keyboard interrupt received, stopping demo...")
+            break
         except Exception as e:
             print(f"Step error: {e}")
+            # Continue the loop instead of breaking on step errors
+            continue
         
         # Control frame rate based on config
         fps = gui_config.get('fps_limit', 2)
         clock.tick(fps)
+    
+    # Clean up threads before exiting
+    print("\n🧹 Cleaning up threads...")
+    stop_event.set()  # Signal input thread to stop
+    
+    # Wait for input thread to finish (with timeout)
+    if input_thread.is_alive():
+        print("⏳ Waiting for input thread to terminate...")
+        input_thread.join(timeout=2.0)
+        if input_thread.is_alive():
+            print("⚠️ Input thread did not terminate gracefully (this is expected on Windows due to input() blocking)")
+        else:
+            print("✅ Input thread terminated successfully")
+    else:
+        print("✅ Input thread already terminated")
     
     pygame.quit()
     print(f"\n✅ Demo completed!")
@@ -593,6 +665,8 @@ def main():
                        help='Maximum number of steps in the demo (default: 10)')
     parser.add_argument('--config', type=str, default=None,
                        help='Path to configuration file (default: config/gym/crafter_config.yaml)')
+    parser.add_argument('--no-gui', action='store_true',
+                       help='Run in background mode without creating GUI window')
     args = parser.parse_args()
     
     print("🎮 CRAFTER INTERACTIVE DEMO WITH GUI RENDERING")
@@ -621,7 +695,7 @@ def main():
     print("    Or specify custom size: --resolution 1000")
     
     # Run the demo
-    demo_crafter_interactive(resolution=args.resolution, max_steps=args.max_steps, config_path=args.config)
+    demo_crafter_interactive(resolution=args.resolution, max_steps=args.max_steps, config_path=args.config, no_gui=args.no_gui)
 
 if __name__ == "__main__":
     main()
