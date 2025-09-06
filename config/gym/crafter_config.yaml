@@ -23,8 +23,8 @@ brain:
 # GUI Configuration (unified with crafter_interactive_launcher)
 gui:
   resolution: low               # Use crafter_interactive_launcher preset: tiny/small/low/medium/high/ultra
-  width: 384                    # Explicit width override (optional)
-  height: 384                   # Explicit height override (optional) 
+  width: 400                    # Explicit width override (optional, [custom])
+  height: 400                   # Explicit height override (optional, [custom])
   fps: 30                       # Frames per second
   title: "Crafter"
   resizable: false
@@ -138,19 +138,11 @@ detector:
     iou_threshold: 0.3
     text_overlap_threshold: 0.2
   
-  # Template matching detector for grid-based games
-  template:
-    assets_path: './crafter/crafter/assets'  # Path to template images
-    grid_size: [9, 9]  # Grid dimensions [width, height]
-    threshold: 0.8     # Template matching threshold (0.0-1.0)
-    # For Crafter: 7x9 main view + 2 rows for inventory
-    # Main game area: 7 rows, Inventory area: 2 rows
-  
   # Crafter API detector configuration (for structured game state)
   crafter_api:
     grid_size: [7, 9]  # Grid dimensions [rows, cols] - 7x9 main view
     inventory_size: [2, 9]  # Inventory grid size (width, height)
-    unit_size: 64  # Size of each grid cell in pixels
+    unit_size: 64   # Size of each grid cell in pixels - matches environment creation
     enable_semantic_view: true  # Include all world objects in detection
     
     # Detection method selection
@@ -175,7 +167,7 @@ detector:
 # Database path configuration
 database:
   sqlite_path: "./data/sql/crafter.db"
-  vector_db_path: "./data/vector/crafter"
+  vector_db_path: "./data/vector"
   backup_enabled: true
   backup_interval: 1800  # More frequent backups
 

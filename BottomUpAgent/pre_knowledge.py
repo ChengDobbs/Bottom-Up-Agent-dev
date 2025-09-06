@@ -129,3 +129,69 @@ Respond only with action instructions or a thought-action reasoning trace.
 
 # Respond only with action instructions or a thought-action reasoning trace.
 # """
+
+    if game_name == "Crafter":
+        return f"""
+You are playing Crafter, a 2D survival crafting game. Your goal is to earn all 22 achievements in a single episode through strategic resource management and progression.
+
+**CORE MECHANICS:**
+- 2D world with terrain types: grass, stone, tree, water, coal, iron, diamond
+- Creatures: zombies, skeletons (hostile), cows (food source)
+- Vital stats: Health, Food, Drink, Energy (each 0-9)
+- Time progression requires careful resource management
+
+**KEYBOARD CONTROLS & ACTIONS:**
+• WASD: Movement (actions 1-4)
+• SPACE: Primary interaction - collect/attack/eat (action 5)
+• TAB: Sleep to restore energy (action 6)
+• T: Place crafting table (action 8)
+• R: Place stone block (action 7)
+• F: Place furnace (action 9)
+• P: Plant sapling (action 10)
+• 1-6: Craft tools and weapons (actions 11-16)
+  - 1: Wood pickaxe  - 2: Stone pickaxe  - 3: Iron pickaxe
+  - 4: Wood sword    - 5: Stone sword    - 6: Iron sword
+
+**RESOURCE COLLECTION (use SPACE key):**
+- Tree → wood (no tool) | Stone/Coal → wood pickaxe | Iron → stone pickaxe | Diamond → iron pickaxe
+- Water → drink (no tool) | Grass → sapling (10% chance)
+
+**CRAFTING (near required infrastructure):**
+- Wood tools: 1 wood + table | Stone tools: 1 wood + 1 stone + table
+- Iron tools: 1 wood + 1 coal + 1 iron + table + furnace
+
+**PLACEMENT:**
+- Table: 2 wood | Furnace: 4 stone | Plant: 1 sapling (grass only) | Stone: 1 stone
+
+**22 ACHIEVEMENTS (progression order):**
+Basic: collect_wood, collect_drink, collect_sapling, place_table, make_wood_pickaxe
+Intermediate: collect_stone, collect_coal, make_stone_pickaxe, place_furnace, make_wood_sword, make_stone_sword
+Advanced: collect_iron, make_iron_pickaxe, make_iron_sword, collect_diamond
+Survival: sleep (wake_up), eat_plant, eat_cow, defeat_zombie, defeat_skeleton
+Building: place_stone, place_plant
+
+**OPTIMAL STRATEGY:**
+1. Early: Wood → Table → Wood Pickaxe → Stone/Coal
+2. Mid: Stone Pickaxe → Furnace → Iron → Iron Tools
+3. Combat: Craft swords → Fight creatures → Eat for health
+4. Survival: Monitor stats, sleep when energy <3, eat when health <5
+
+**DECISION FRAMEWORK:**
+1. **Survival First**: Energy <3 → TAB (sleep) | Health <5 → SPACE (eat plants/cows)
+2. **Resource Priority**: Wood → Stone/Coal → Iron → Diamond (tool progression)
+3. **Infrastructure**: Table before crafting | Furnace for iron tools
+4. **Combat**: Swords required for creatures | Fight for food/achievements
+
+**KEY CONTROLS REMINDER:**
+- Movement: WASD | Interact: SPACE | Sleep: TAB
+- Place: T(table), R(stone), F(furnace), P(plant)
+- Craft: 1-3(pickaxes), 4-6(swords)
+
+**CRITICAL RULES:**
+- Check tool requirements before resource collection
+- Stay adjacent to infrastructure when crafting
+- Never fight without weapons
+- Monitor all vital stats continuously
+
+Analyze current state, identify missing achievements, select optimal keyboard action with clear reasoning.
+"""

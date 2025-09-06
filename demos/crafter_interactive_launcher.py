@@ -21,7 +21,6 @@ try:
     import crafter
     import pygame
     import numpy as np
-    from PIL import Image
     print("✅ All required modules imported successfully")
 except ImportError as e:
     print(f"❌ Import error: {e}")
@@ -308,9 +307,16 @@ def get_gui_config(config, resolution_override=None):
         preset = gui_config.get('resolution', gui_config.get('resolution_preset', 'low'))
         if preset in presets:
             width, height = presets[preset]
-        else:
+        elif preset == 'custom':
+            # Custom mode: use explicit width/height from config
             width = gui_config.get('width', default_width)
             height = gui_config.get('height', default_height)
+        else:
+            # Fallback for unknown presets
+            width = gui_config.get('width', default_width)
+            height = gui_config.get('height', default_height)
+            print(f"⚠️ Unknown resolution preset '{preset}', supported presets: {list(presets.keys())} + 'custom'")
+            print(f"   Using fallback values: {width}x{height}")
     
     return {
         'width': width,

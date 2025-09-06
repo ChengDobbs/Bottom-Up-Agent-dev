@@ -4,6 +4,7 @@ import pygame
 import gymnasium as gym
 import threading
 import time
+import warnings
 from typing import Dict, List, Tuple, Any, Optional, Union
 from collections import defaultdict
 import json
@@ -20,18 +21,45 @@ class GymEnvironmentAdapter:
         self.config = config
         self.env_name = config.get('game_name', 'CartPole-v1')
         
-        # Read GUI configuration properly
+        # Read GUI configuration with resolution presets
         gui_config = config.get('gui', {})
-        gui_width = gui_config.get('width', 800)
-        gui_height = gui_config.get('height', 800)
+        
+        # Resolution presets (matching demo implementation)
+        presets = {
+            'tiny': [200, 200],
+            'small': [300, 300], 
+            'low': [400, 400],
+            'medium': [600, 600],
+            'high': [800, 800],
+            'ultra': [1200, 1200]
+        }
+        
+        # Determine resolution from preset or explicit values
+        preset = gui_config.get('resolution', 'low')
+        if preset in presets:
+            gui_width, gui_height = presets[preset]
+            resolution_display = f"{gui_width}x{gui_height}"
+        elif preset == 'custom':
+            # Custom mode: use explicit width/height values
+            gui_width = gui_config.get('width', 800)
+            gui_height = gui_config.get('height', 800)
+            resolution_display = f"{gui_width}x{gui_height}"
+        else:
+            # Fallback for unknown presets
+            gui_width = gui_config.get('width', 800)
+            gui_height = gui_config.get('height', 800)
+            resolution_display = f"{gui_width}x{gui_height}"
+            print(f"⚠️ Unknown resolution preset '{preset}', using custom values")
+            
         self.window_size = (gui_width, gui_height)
         self.fps = gui_config.get('fps', 60)
+        print(f"GUI configured: {gui_width}x{gui_height} (preset: {preset})")
         
         # Create Gym environment based on configuration
         self.env = self._create_environment(config)
         
-        # GUI window setup
-        self.window_title = f"Gym Environment: {self.env_name}"
+        # GUI window setup - always show actual pixel dimensions in title
+        self.window_title = f"Gym Environment: {self.env_name} [{resolution_display}]"
         self.screen = None
         self.clock = None
         self.running = False
@@ -51,6 +79,50 @@ class GymEnvironmentAdapter:
         self.episode_steps = 0
         self.episode_reward = 0.0
         self.total_episodes = 0
+        
+        # Crafter interactive features
+        self.is_crafter = self.env_name == 'Crafter' or (self.env_name and 'crafter' in self.env_name.lower())
+        self.crafter_achievements_history = []
+        self.crafter_total_reward = 0.0
+        self.crafter_total_steps = 0
+        
+        # Crafter action mappings
+        self.crafter_actions = {
+            0: "noop", 1: "move_left", 2: "move_right", 3: "move_up", 4: "move_down",
+            5: "do", 6: "sleep", 7: "place_stone", 8: "place_table", 9: "place_furnace",
+            10: "place_plant", 11: "make_wood_pickaxe", 12: "make_stone_pickaxe", 
+            13: "make_iron_pickaxe", 14: "make_wood_sword", 15: "make_stone_sword", 16: "make_iron_sword"
+        }
+        
+        # Crafter achievements list
+        self.crafter_achievements = [
+            'collect_coal', 'collect_diamond', 'collect_drink', 'collect_iron',
+            'collect_sapling', 'collect_stone', 'collect_wood', 'defeat_skeleton',
+            'defeat_zombie', 'eat_cow', 'eat_plant', 'make_iron_pickaxe',
+            'make_iron_sword', 'make_stone_pickaxe', 'make_stone_sword',
+            'make_wood_pickaxe', 'make_wood_sword', 'place_furnace',
+            'place_plant', 'place_stone', 'place_table', 'wake_up'
+        ]
+        
+        # Crafter keyboard mapping
+        self.crafter_keyboard_mapping = {
+            pygame.K_w: 3,          # Move up
+            pygame.K_a: 1,          # Move left  
+            pygame.K_s: 4,          # Move down
+            pygame.K_d: 2,          # Move right
+            pygame.K_SPACE: 5,      # Collect/attack/interact (do)
+            pygame.K_TAB: 6,        # Sleep
+            pygame.K_t: 8,          # Place table
+            pygame.K_r: 7,          # Place rock/stone
+            pygame.K_f: 9,          # Place furnace
+            pygame.K_p: 10,         # Place plant
+            pygame.K_1: 11,         # Craft wood pickaxe
+            pygame.K_2: 12,         # Craft stone pickaxe
+            pygame.K_3: 13,         # Craft iron pickaxe
+            pygame.K_4: 14,         # Craft wood sword
+            pygame.K_5: 15,         # Craft stone sword
+            pygame.K_6: 16,         # Craft iron sword
+        }
         
         # Action mapping for different environment types
         self.action_mapping = self._create_action_mapping()
@@ -123,43 +195,25 @@ class GymEnvironmentAdapter:
                 import crafter
                 print("✅ Crafter module imported successfully")
                 
-                # Use crafter_interactive_launcher's resolution system for consistency
-                gui_config = config.get('gui', {})
+                # Get Crafter-specific configuration
+                detector_config = config.get('detector', {})
+                crafter_api_config = detector_config.get('crafter_api', {})
+                unit_size = crafter_api_config.get('unit_size', 64)  # Default to 64 if not specified
                 
-                # Resolution presets (matching crafter_interactive_launcher exactly)
-                resolution_presets = {
-                    'tiny': [200, 200],
-                    'small': [300, 300], 
-                    'low': [400, 400],
-                    'medium': [600, 600],
-                    'high': [800, 800],
-                    'ultra': [1200, 1200]
-                }
+                # Create Crafter environment with unit_size parameter for internal resolution
+                # unit_size controls the pixel size of each grid cell, affecting internal rendering resolution
+                env = crafter.Env(size=(unit_size, unit_size))
+                print(f"✅ Created Crafter environment with unit_size={unit_size} (internal resolution control)")
+                print(f"   Note: unit_size controls internal rendering resolution, not window size")
                 
-                # Determine resolution using crafter_interactive_launcher logic
-                resolution_setting = gui_config.get('resolution', 'low')  # Default to 'low' (400x400)
-                
-                if isinstance(resolution_setting, str):
-                    if resolution_setting in resolution_presets:
-                        width, height = resolution_presets[resolution_setting]
-                    else:
-                        try:
-                            size = int(resolution_setting)
-                            width = height = size
-                        except ValueError:
-                            width = gui_config.get('width', 400)
-                            height = gui_config.get('height', 400)
+                # Set GUI mode if specified
+                gui_mode = gym_config.get('gui', True)
+                if hasattr(env, 'set_gui_mode'):
+                    env.set_gui_mode(gui_mode)
+                    print(f"GUI mode set to: {gui_mode}")
                 else:
-                    # Numeric resolution
-                    width = height = int(resolution_setting)
-                
-                # Override with explicit width/height if provided
-                width = gui_config.get('width', width)
-                height = gui_config.get('height', height)
-                
-                # Use direct Crafter creation with unified resolution system
-                env = crafter.Env(size=(width, height), view=(9, 9))
-                print(f"✅ Created Crafter environment with {width}x{height} resolution (unified with crafter_interactive_launcher)")
+                    print(f"Note: GUI mode setting not available, using default behavior")
+                    
                 return env
             except ImportError:
                 print("❌ Crafter not available, falling back to CartPole")
@@ -227,7 +281,44 @@ class GymEnvironmentAdapter:
             self.gui_thread.start()
             mode_text = "Interactive" if interactive_mode else "Observation"
             print(f"GUI started in separate thread - {mode_text} mode")
+            
+            # Print Crafter controls if this is a Crafter environment
+            if self.is_crafter and interactive_mode:
+                self._print_crafter_controls()
+            
             time.sleep(0.5)  # Give GUI time to initialize
+    
+    def start_crafter_interactive(self, max_steps=10000):
+        """Start Crafter in interactive mode with full controls"""
+        if not self.is_crafter:
+            print("❌ This method is only available for Crafter environments")
+            return False
+        
+        print("🎮 Starting Crafter Interactive Mode...")
+        print("📋 Use keyboard controls to play Crafter manually")
+        
+        # Start GUI in interactive mode
+        self.start_gui(interactive_mode=True)
+        
+        # Reset environment to start fresh
+        self.reset()
+        
+        print(f"🚀 Crafter Interactive Mode started! Max steps: {max_steps}")
+        print("   Press ESC to quit")
+        
+        return True
+    
+    def _print_crafter_controls(self):
+        """Print Crafter keyboard controls"""
+        print("\n🎮 Crafter Controls:")
+        print("   WASD: Move (W=Up, A=Left, S=Down, D=Right)")
+        print("   SPACE: Do (collect/attack/interact)")
+        print("   TAB: Sleep")
+        print("   T: Place Table, R: Place Stone, F: Place Furnace, P: Place Plant")
+        print("   1-6: Craft items (1=Wood Pickaxe, 2=Stone Pickaxe, 3=Iron Pickaxe,")
+        print("                    4=Wood Sword, 5=Stone Sword, 6=Iron Sword)")
+        print("   ESC: Quit")
+        print()
     
     def stop_gui(self):
         """Stop the GUI window"""
@@ -262,7 +353,22 @@ class GymEnvironmentAdapter:
     
     def _handle_keyboard_input(self, key):
         """Handle keyboard input for manual control (optional)"""
-        # Map common keys to actions
+        # Handle Crafter-specific keyboard mapping
+        if self.is_crafter and key in self.crafter_keyboard_mapping:
+            action = self.crafter_keyboard_mapping[key]
+            # Execute action and print action name for feedback
+            action_name = self.crafter_actions.get(action, f"action_{action}")
+            print(f"🎮 Crafter Action: {action_name} (key: {pygame.key.name(key)})")
+            self.step(action)
+            return
+        
+        # Handle ESC key to quit
+        if key == pygame.K_ESCAPE:
+            print("🚪 ESC pressed - stopping GUI...")
+            self.running = False
+            return
+            
+        # Map common keys to actions for non-Crafter environments
         key_mapping = {
             pygame.K_LEFT: 'left',
             pygame.K_RIGHT: 'right',
@@ -354,10 +460,18 @@ class GymEnvironmentAdapter:
                 
                 # For other environments, try to get image data
                 try:
-                    img = self.env.render(mode='rgb_array')
+                    # Check if this is a Crafter environment that supports size parameter
+                    if hasattr(self.env, 'render') and 'crafter' in str(type(self.env)).lower():
+                        img = self.env.render(size=self.window_size)
+                    else:
+                        img = self.env.render(mode='rgb_array')
                 except:
                     try:
-                        img = self.env.render()
+                        # Fallback: try render without parameters
+                        if hasattr(self.env, 'render') and 'crafter' in str(type(self.env)).lower():
+                            img = self.env.render(size=self.window_size)
+                        else:
+                            img = self.env.render()
                         if img is None:
                             img = self._create_state_visualization()
                     except:
@@ -515,6 +629,11 @@ class GymEnvironmentAdapter:
         self.episode_steps += 1
         self.episode_reward += reward
         
+        # Update Crafter-specific tracking
+        if self.is_crafter:
+            self.crafter_total_reward += reward
+            self.crafter_total_steps += 1
+        
         processed_obs = self._process_observation(obs)
         
         # Add environment info
@@ -523,6 +642,13 @@ class GymEnvironmentAdapter:
             'episode_reward': self.episode_reward,
             'total_episodes': self.total_episodes
         })
+        
+        # Handle episode completion
+        if done:
+            # Track Crafter achievements if this is a Crafter environment
+            if self.is_crafter and 'achievements' in info:
+                self.crafter_achievements_history.append(info['achievements'])
+                self._print_crafter_stats()
         
         return processed_obs, reward, done, info
     
@@ -749,6 +875,61 @@ class GymEnvironmentAdapter:
             self._render_environment()
             pygame.display.flip()
     
+    def _compute_crafter_success_rates(self):
+        """Calculate achievement success rates for Crafter"""
+        if not self.crafter_achievements_history:
+            return {name: 0.0 for name in self.crafter_achievements}
+        
+        success_rates = {}
+        total_episodes = len(self.crafter_achievements_history)
+        
+        for achievement in self.crafter_achievements:
+            success_count = sum(1 for episode_achievements in self.crafter_achievements_history 
+                              if episode_achievements.get(achievement, 0) > 0)
+            success_rates[achievement] = (success_count / total_episodes) * 100
+        
+        return success_rates
+    
+    def _compute_crafter_score(self, success_rates):
+        """Calculate Crafter score (geometric mean, offset by 1%)"""
+        rates = [success_rates[name] for name in self.crafter_achievements]
+        
+        # Use geometric mean to calculate score, offset by 1%
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', category=RuntimeWarning)
+            # Geometric mean: exp(mean(log(1 + rates))) - 1
+            log_rates = [np.log(1 + rate) for rate in rates if rate >= 0]
+            if log_rates:
+                score = np.exp(np.mean(log_rates)) - 1
+            else:
+                score = 0.0
+        
+        return score
+    
+    def _print_crafter_stats(self):
+        """Print Crafter-specific statistics"""
+        if not self.is_crafter or not self.crafter_achievements_history:
+            return
+        
+        latest_achievements = self.crafter_achievements_history[-1]
+        total_achievements = sum(latest_achievements.values())
+        
+        # Calculate success rates and score
+        success_rates = self._compute_crafter_success_rates()
+        crafter_score = self._compute_crafter_score(success_rates)
+        
+        print(f"\n🏆 Crafter Episode Stats:")
+        print(f"   Episodes: {len(self.crafter_achievements_history)}")
+        print(f"   Total Achievements: {total_achievements}")
+        print(f"   Crafter Score: {crafter_score:.2f}")
+        print(f"   Total Reward: {self.crafter_total_reward:.2f}")
+        print(f"   Total Steps: {self.crafter_total_steps}")
+        
+        # Show achieved milestones
+        achieved = [name for name, count in latest_achievements.items() if count > 0]
+        if achieved:
+            print(f"   Achieved: {', '.join(achieved[:5])}{'...' if len(achieved) > 5 else ''}")
+    
     def close(self):
         """Close the environment and GUI"""
         self.stop_gui()
@@ -781,7 +962,9 @@ class GymAdapterFactory:
             config = {}
         
         # Set environment-specific defaults
-        config['game_name'] = env_name
+        # Only set game_name if it's not already provided in config
+        if 'game_name' not in config:
+            config['game_name'] = env_name
         
         # Environment-specific configurations
         if 'CartPole' in env_name:

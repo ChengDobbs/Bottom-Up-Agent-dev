@@ -18,10 +18,14 @@ import queue
 from pathlib import Path
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
-from BottomUpAgent.Detector import Detector
-from BottomUpAgent.CrafterGridExtractor import CrafterGridExtractor
+
+# Use pip installed crafter package (release version)
 import crafter
 import pygame
+
+# Import local modules
+from BottomUpAgent.Detector import Detector
+from BottomUpAgent.CrafterGridExtractor import CrafterGridExtractor
 from demos.crafter_interactive_launcher import demo_crafter_interactive, get_gui_config, load_config as load_launcher_config
 
 def load_config(config_path=None):
@@ -54,7 +58,8 @@ class SharedEnvironment:
                 obs = self.env.reset()
                 # Take a few random steps to generate some world content
                 for _ in range(10):
-                    action = self.env.action_space.sample()
+                    # Generate random action (crafter has actions 0-16)
+                    action = np.random.randint(0, 17)
                     obs, reward, done, info = self.env.step(action)
                     if done:
                         obs = self.env.reset()
@@ -164,6 +169,7 @@ class GridContentChecker:
     def start_gui_process(self):
         """Start the interactive GUI process in a separate thread"""
         # Initialize step counter for tracking game state changes
+        # Start with 0, player actions will increment to 1, 2, 3...
         self.game_step_count = 0
         
         def gui_worker():
@@ -176,7 +182,8 @@ class GridContentChecker:
                 
                 # Initialize pygame for the GUI
                 pygame.init()
-                gui_config = get_gui_config(self.config, 'low')
+                # Use actual GUI config from crafter_config.yaml instead of forcing 'low'
+                gui_config = get_gui_config(self.config)
                 window_size = (gui_config['width'], gui_config['height'])
                 screen = pygame.display.set_mode(window_size)
                 pygame.display.set_caption(f"Crafter Interactive - Grid Check [{window_size[0]}x{window_size[1]}]")
@@ -558,6 +565,195 @@ class GridContentChecker:
         print("  ⬜ = Empty space")
         print("  🎮👈👉👆👇 = Player position & direction")
     
+    def generate_scene_summary_json(self, reference_grid, detected_grid, player_pos, player_facing, step_number):
+        """Generate a concise JSON summary optimized for MCP context"""
+        import json
+        import numpy as np
+        
+        # Helper function to convert numpy types to Python types
+        def convert_numpy_types(obj):
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, np.integer):
+                return int(obj)
+            elif isinstance(obj, np.floating):
+                return float(obj)
+            elif isinstance(obj, dict):
+                return {k: convert_numpy_types(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_numpy_types(item) for item in obj]
+            else:
+                return obj
+        
+        # Get player inventory (only non-zero items)
+        inventory = {}
+        try:
+            with self.shared_env.lock:
+                if hasattr(self.env, '_player') and hasattr(self.env._player, 'inventory'):
+                    for item, count in self.env._player.inventory.items():
+                        if count > 0:
+                            inventory[item] = int(count)
+        except Exception as e:
+            print(f"⚠️ Could not get inventory: {e}")
+        
+        # Find player's grid position
+        player_grid_pos = None
+        for row in range(self.grid_rows):
+            for col in range(self.grid_cols):
+                world_pos = reference_grid.get((row, col), {}).get('world_pos', [0, 0])
+                if world_pos[0] == player_pos[0] and world_pos[1] == player_pos[1]:
+                    player_grid_pos = [row, col]
+                    break
+            if player_grid_pos:
+                break
+        
+        # Get immediate surroundings (only non-empty cells)
+        surroundings = {}
+        if player_grid_pos:
+            directions = {
+                (-1, -1): "northwest", (-1, 0): "north", (-1, 1): "northeast",
+                (0, -1): "west", (0, 1): "east",
+                (1, -1): "southwest", (1, 0): "south", (1, 1): "southeast"
+            }
+            
+            for (dr, dc), direction in directions.items():
+                r, c = player_grid_pos[0] + dr, player_grid_pos[1] + dc
+                if 0 <= r < self.grid_rows and 0 <= c < self.grid_cols:
+                    ref_cell = reference_grid.get((r, c), {})
+                    content = ref_cell.get('type', 'empty')
+                    if content != 'empty' and content != 'grass':  # Skip empty and grass
+                        surroundings[direction] = content
+                        # Add creatures/objects if present
+                        if 'creatures' in ref_cell and ref_cell['creatures']:
+                            surroundings[direction] += f" (creatures: {ref_cell['creatures']})"
+                        if 'objects' in ref_cell and ref_cell['objects']:
+                            surroundings[direction] += f" (objects: {ref_cell['objects']})"
+        
+        # Count visible elements with coordinates (excluding grass)
+        element_counts = {}
+        element_positions = {}
+        detection_accuracy = 0
+        total_cells = 0
+        
+        for row in range(self.grid_rows):
+            for col in range(self.grid_cols):
+                ref_content = reference_grid.get((row, col), {}).get('type', 'empty')
+                det_content = detected_grid.get((row, col), {}).get('type', 'empty')
+                ref_cell = reference_grid.get((row, col), {})
+                world_pos = ref_cell.get('world_pos', [0, 0])
+                
+                total_cells += 1
+                if ref_content == det_content:
+                    detection_accuracy += 1
+                
+                if ref_content != 'empty' and ref_content != 'grass':
+                    element_counts[ref_content] = element_counts.get(ref_content, 0) + 1
+                    
+                    # Store position information
+                    if ref_content not in element_positions:
+                        element_positions[ref_content] = []
+                    element_positions[ref_content].append({
+                        "grid_pos": [row, col],
+                        "world_pos": world_pos
+                    })
+        
+        detection_accuracy = round((detection_accuracy / total_cells) * 100, 1) if total_cells > 0 else 0
+        
+        # Generate facing direction text
+        facing_text = {
+            (-1, 0): "west", (1, 0): "east", (0, -1): "north", (0, 1): "south"
+        }.get(tuple(convert_numpy_types(player_facing)), "unknown")
+        
+        # Create concise scene summary with coordinates
+        scene_summary = {
+            "step": step_number,
+            "player": {
+                "position": convert_numpy_types(player_pos),
+                "grid_position": convert_numpy_types(player_grid_pos),
+                "facing": facing_text,
+                "inventory": inventory if inventory else "empty"
+            },
+            "surroundings": surroundings if surroundings else "only grass terrain",
+            "visible_elements": {
+                "counts": element_counts if element_counts else "none (only grass)",
+                "positions": convert_numpy_types(element_positions) if element_positions else {}
+            },
+            "detection_accuracy": f"{detection_accuracy}%",
+            "context": self._generate_compact_context(surroundings, element_counts, player_pos, facing_text, inventory)
+        }
+        
+        return convert_numpy_types(scene_summary)
+    
+    def _generate_compact_context(self, surroundings, element_counts, player_pos, facing_text, inventory):
+        """Generate compact context text optimized for MCP"""
+        context_parts = []
+        
+        # Player status
+        context_parts.append(f"Player at {player_pos} facing {facing_text}")
+        
+        # Inventory (only if not empty)
+        if inventory:
+            inv_summary = ", ".join([f"{item}({count})" for item, count in inventory.items()])
+            context_parts.append(f"Has: {inv_summary}")
+        
+        # Immediate surroundings (only non-grass)
+        if surroundings:
+            surr_summary = ", ".join([f"{direction}:{content}" for direction, content in surroundings.items()])
+            context_parts.append(f"Near: {surr_summary}")
+        
+        # Area overview (only significant elements)
+        if element_counts:
+            area_summary = ", ".join([f"{element}({count})" for element, count in element_counts.items()])
+            context_parts.append(f"Area has: {area_summary}")
+        else:
+            context_parts.append("Area: grass terrain only")
+        
+        return "; ".join(context_parts)
+    
+    def _generate_context_text(self, surrounding_area, visible_elements, player_pos, player_facing, inventory):
+        """Generate human-readable context text for MCP"""
+        context_parts = []
+        
+        # Player status
+        facing_text = {
+            (-1, 0): "west",
+            (1, 0): "east",
+            (0, -1): "north",
+            (0, 1): "south"
+        }.get(tuple(player_facing), "unknown direction")
+        
+        context_parts.append(f"Player is at world position {player_pos}, facing {facing_text}.")
+        
+        # Inventory status
+        if inventory:
+            inv_items = [f"{count} {item}" for item, count in inventory.items()]
+            context_parts.append(f"Player inventory contains: {', '.join(inv_items)}.")
+        else:
+            context_parts.append("Player inventory is empty.")
+        
+        # Immediate surroundings
+        immediate_surroundings = []
+        for cell in surrounding_area:
+            if cell["relative_position"] != "center (player)" and cell["actual_content"] != "empty":
+                immediate_surroundings.append(f"{cell['actual_content']} to the {cell['relative_position']}")
+        
+        if immediate_surroundings:
+            context_parts.append(f"Immediate surroundings: {', '.join(immediate_surroundings)}.")
+        else:
+            context_parts.append("Player is surrounded by empty grass terrain.")
+        
+        # Visible elements summary
+        if visible_elements:
+            element_summary = []
+            for element, info in visible_elements.items():
+                if element != "grass":  # Skip grass as it's the default terrain
+                    element_summary.append(f"{info['count']} {element}")
+            
+            if element_summary:
+                context_parts.append(f"Visible in the area: {', '.join(element_summary)}.")
+        
+        return " ".join(context_parts)
+    
     def print_inventory_status(self):
         """Print player inventory information in a compact multi-column layout"""
         try:
@@ -652,6 +848,66 @@ class GridContentChecker:
         except Exception as e:
             print(f"\n❌ Error reading inventory: {e}")
     
+    def perform_observation(self, step_number):
+        """Perform a complete observation of the game state"""
+        try:
+            # Get current player position for display
+            with self.shared_env.lock:
+                current_player_pos = self.env._player.pos
+            print(f"🚶 Player position: {current_player_pos}")
+            
+            # Get current frame from shared environment
+            try:
+                with self.shared_env.lock:
+                    frame = self.env.render(size=(400, 400))
+                
+                if frame is None:
+                    print("❌ Failed to get frame from environment")
+                    return
+                    
+            except Exception as render_error:
+                print(f"❌ Render error: {render_error}")
+                return
+            
+            # Get reference grid content (actual game state)
+            reference_grid = self.get_reference_grid_content()
+            
+            # Enhanced object/creature analysis
+            self.analyze_object_creature_layers(reference_grid)
+            
+            # Get detected grid content using REAL detector
+            detected_grid = self.get_detected_grid_content(frame)
+            
+            # Get player position and facing direction
+            with self.shared_env.lock:
+                player_pos = self.env._player.pos
+                player_facing = getattr(self.env._player, 'facing', [0, 1])  # Default facing down
+            
+            # Generate JSON scene summary for MCP context
+            scene_summary = self.generate_scene_summary_json(reference_grid, detected_grid, player_pos, player_facing, step_number)
+            
+            # Print JSON scene summary
+            print("\n" + "=" * 80)
+            print("📋 JSON SCENE SUMMARY FOR MCP CONTEXT")
+            print("=" * 80)
+            import json
+            print(json.dumps(scene_summary, indent=2, ensure_ascii=False))
+            print("=" * 80)
+            
+            # Print simplified grid table with checkmarks
+            self.print_simplified_grid_table(reference_grid, detected_grid, player_pos, player_facing)
+            
+            # Compare and analyze
+            comparison_result = self.compare_grid_contents(reference_grid, detected_grid)
+            
+            if step_number == 0:
+                print(f"\n⏳ Initial observation complete. Ready for player actions...")
+            else:
+                print(f"\n⏳ Step {step_number} analysis complete. Waiting for next action...")
+                
+        except Exception as e:
+            print(f"❌ Error in observation: {e}")
+    
     def run_comparison(self):
         """Run the REAL grid content comparison with interactive GUI - Step-by-step detection"""
         print("🚀 Starting REAL Grid Content Comparison (Step-by-Step Mode)")
@@ -676,61 +932,31 @@ class GridContentChecker:
             print("🔍 Each action will trigger immediate detection analysis")
             print()
             
-            last_detected_step = 0
+            last_detected_step = -1  # Start from -1 to trigger initial observation
             max_steps = 3000  # Increased step limit for more debugging
+            
+            # Perform initial observation before any player action
+            print(f"\n--- Initial Observation (Step 0) ---")
+            print(f"🖼️ Game State Before Any Action - Analyzing Grid Content")
+            self.perform_observation(0)  # Initial observation as step 0
+            last_detected_step = 0
             
             while self.gui_running and last_detected_step < max_steps:
                 # Check if a new game step has occurred
                 try:
                     current_step = getattr(self, 'game_step_count', 0)
                     
-                    # Trigger detection when a new step occurs
+                    # Trigger detection when a new step occurs (player actions)
                     if current_step > last_detected_step:
                         last_detected_step = current_step
+                        # Display step number for player actions (starting from 1)
+                        display_step = current_step
                         
-                        print(f"\n🖼️ Step #{current_step}/{max_steps} - Game State Changed")
+                        print(f"\n--- Step {display_step} (Max: {max_steps}) ---")
+                        print(f"🖼️ Game State Changed - Analyzing Grid Content")
                         
-                        # Get current player position for display
-                        with self.shared_env.lock:
-                            current_player_pos = self.env._player.pos
-                        print(f"🚶 Player position: {current_player_pos}")
-                        
-                        # Get current frame from shared environment
-                        try:
-                            with self.shared_env.lock:
-                                frame = self.env.render(size=(400, 400))
-                            
-                            if frame is None:
-                                print("❌ Failed to get frame from environment")
-                                time.sleep(0.1)
-                                continue
-                                
-                        except Exception as render_error:
-                            print(f"❌ Render error: {render_error}")
-                            time.sleep(0.1)
-                            continue
-                        
-                        # Get reference grid content (actual game state)
-                        reference_grid = self.get_reference_grid_content()
-                        
-                        # Enhanced object/creature analysis
-                        self.analyze_object_creature_layers(reference_grid)
-                        
-                        # Get detected grid content using REAL detector
-                        detected_grid = self.get_detected_grid_content(frame)
-                        
-                        # Get player position and facing direction
-                        with self.shared_env.lock:
-                            player_pos = self.env._player.pos
-                            player_facing = getattr(self.env._player, 'facing', [0, 1])  # Default facing down
-                        
-                        # Print simplified grid table with checkmarks
-                        self.print_simplified_grid_table(reference_grid, detected_grid, player_pos, player_facing)
-                        
-                        # Compare and analyze
-                        comparison_result = self.compare_grid_contents(reference_grid, detected_grid)
-                        
-                        print(f"\n⏳ Waiting for next action... (Step {current_step}/{max_steps})")
+                        # Perform observation for this step
+                        self.perform_observation(display_step)
                     
                     # Short sleep to prevent excessive CPU usage
                     time.sleep(0.1)
