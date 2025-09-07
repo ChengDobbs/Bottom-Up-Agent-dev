@@ -9,7 +9,7 @@ from typing import Dict, List, Tuple, Any, Optional, Union
 from collections import defaultdict
 import json
 from PIL import Image
-from .CrafterGridExtractor import CrafterGridExtractor
+from .Eye import Eye
 
 class GymEnvironmentAdapter:
     """
@@ -159,23 +159,14 @@ class GymEnvironmentAdapter:
                     print(f"   Environment type: {type(self.env)}")
                     print(f"   Available attributes: {[attr for attr in dir(self.env) if not attr.startswith('_')][:10]}...")
         
-        # Initialize CrafterGridExtractor for Crafter environments
+        # Initialize Eye module for grid extraction (replaces CrafterGridExtractor)
         self.grid_extractor = None
         if self.env_name == 'Crafter' or 'crafter' in self.env_name.lower():
             try:
-                self.grid_extractor = CrafterGridExtractor(config)
-                print(f"✅ CrafterGridExtractor initialized for {self.env_name}")
-                
-                # Start parallel launcher if crafter_api detector is used
-                if self.detector and self.detector.detector_type == 'crafter_api':
-                    success = self.grid_extractor.start_parallel_launcher(max_steps=10000)
-                    if success:
-                        print(f"🚀 Parallel crafter_interactive_launcher started")
-                    else:
-                        print(f"⚠️ Failed to start parallel launcher, grid extraction disabled")
-                        self.grid_extractor = None
+                self.grid_extractor = Eye(config)
+                print(f"✅ Eye module initialized for grid extraction in {self.env_name}")
             except Exception as e:
-                print(f"❌ Failed to initialize CrafterGridExtractor: {e}")
+                print(f"❌ Failed to initialize Eye module: {e}")
                 self.grid_extractor = None
     
     def _create_environment(self, config: Dict[str, Any]):
@@ -773,7 +764,7 @@ class GymEnvironmentAdapter:
                 # Add grid slice objects for crafter_api detector
                 if self.detector.detector_type == 'crafter_api' and self.grid_extractor:
                     try:
-                        grid_objects = self.grid_extractor.extract_grid_objects(screen)
+                        grid_objects = self.grid_extractor.extract_grid_cells(screen)
                         if grid_objects:
                             objects.extend(grid_objects)
                             print(f"🔲 Added {len(grid_objects)} grid slice objects")
@@ -934,13 +925,13 @@ class GymEnvironmentAdapter:
         """Close the environment and GUI"""
         self.stop_gui()
         
-        # Clean up CrafterGridExtractor if initialized
+        # Clean up Eye module if initialized
         if self.grid_extractor:
             try:
-                self.grid_extractor.stop_parallel_launcher()
-                print(f"🛑 CrafterGridExtractor parallel launcher stopped")
+                # Eye module doesn't need special cleanup like CrafterGridExtractor
+                print(f"🛑 Eye module cleaned up")
             except Exception as e:
-                print(f"⚠️ Error stopping CrafterGridExtractor: {e}")
+                print(f"⚠️ Error cleaning up Eye module: {e}")
             finally:
                 self.grid_extractor = None
         

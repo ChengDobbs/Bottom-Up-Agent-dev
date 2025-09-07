@@ -25,7 +25,7 @@ import pygame
 
 # Import local modules
 from BottomUpAgent.Detector import Detector
-from BottomUpAgent.CrafterGridExtractor import CrafterGridExtractor
+from BottomUpAgent.Eye import Eye
 from demos.crafter_interactive_launcher import demo_crafter_interactive, get_gui_config, load_config as load_launcher_config
 
 def load_config(config_path=None):
@@ -86,9 +86,9 @@ class GridContentChecker:
         self.detector.crafter_env = self.env  # Set reference for direct API
         print("✅ Detector initialized with shared crafter_env reference")
         
-        # Initialize grid extractor
-        self.grid_extractor = CrafterGridExtractor(config)
-        print("✅ Grid extractor initialized")
+        # Initialize Eye module for grid extraction
+        self.grid_extractor = Eye(config)
+        print("✅ Eye module initialized for grid extraction")
         
         # Grid configuration
         detector_config = config.get('detector', {}).get('crafter_api', {})
@@ -211,8 +211,32 @@ class GridContentChecker:
                                         obs, reward, done, info = self.env.step(action)
                                         # Increment step counter for ANY action taken
                                         self.game_step_count += 1
+                                        
+                                        # Handle game termination
                                         if done:
+                                            print(f"\n🎯 Game episode ended at step {self.game_step_count}")
+                                            print(f"📊 Episode info: {info}")
+                                            print(f"🔄 Resetting environment for new episode...")
                                             obs = self.env.reset()
+                                            
+                                            # Clear detector cache and state to ensure fresh detection
+                                            if hasattr(self, 'detector') and self.detector:
+                                                # Clear template cache if it exists
+                                                if hasattr(self.detector, 'template_cache'):
+                                                    self.detector.template_cache.clear()
+                                                    print("🧹 Cleared detector template cache")
+                                                
+                                                # Reset any cached player position or grid state
+                                                if hasattr(self.detector, 'eye') and self.detector.eye:
+                                                    # Clear any cached grid cells or detection results
+                                                    if hasattr(self.detector.eye, '_cached_grid_cells'):
+                                                        self.detector.eye._cached_grid_cells = None
+                                                    print("🧹 Cleared eye module cache")
+                                            
+                                            # Reset step counter for new episode (episode-specific, not total)
+                                            self.game_step_count = 0
+                                            print(f"✅ New episode started, episode step counter reset to 0")
+                                            print(f"🔄 Detector state cleared for fresh detection in new episode")
                     
                     # Render the game
                     try:
@@ -851,14 +875,33 @@ class GridContentChecker:
     def perform_observation(self, step_number):
         """Perform a complete observation of the game state"""
         try:
-            # Get current player position for display
+            # Check if environment is still valid
             with self.shared_env.lock:
-                current_player_pos = self.env._player.pos
+                if self.env is None:
+                    print("❌ Environment is None, skipping observation")
+                    return
+                    
+                # Check if game is done/terminated
+                try:
+                    current_player_pos = self.env._player.pos
+                    # Verify player is still valid
+                    if current_player_pos is None:
+                        print("❌ Player position is None, game may have ended")
+                        return
+                except AttributeError as e:
+                    print(f"❌ Player object invalid: {e}")
+                    return
+                    
             print(f"🚶 Player position: {current_player_pos}")
             
-            # Get current frame from shared environment
+            # Get current frame from shared environment with error handling
             try:
                 with self.shared_env.lock:
+                    # Ensure environment is still renderable
+                    if not hasattr(self.env, 'render'):
+                        print("❌ Environment render method not available")
+                        return
+                        
                     frame = self.env.render(size=(400, 400))
                 
                 if frame is None:
@@ -869,36 +912,63 @@ class GridContentChecker:
                 print(f"❌ Render error: {render_error}")
                 return
             
-            # Get reference grid content (actual game state)
-            reference_grid = self.get_reference_grid_content()
+            # Get reference grid content (actual game state) with validation
+            try:
+                reference_grid = self.get_reference_grid_content()
+                if not reference_grid:
+                    print("❌ Failed to get reference grid content")
+                    return
+            except Exception as ref_error:
+                print(f"❌ Reference grid error: {ref_error}")
+                return
             
             # Enhanced object/creature analysis
             self.analyze_object_creature_layers(reference_grid)
             
-            # Get detected grid content using REAL detector
-            detected_grid = self.get_detected_grid_content(frame)
+            # Get detected grid content using REAL detector with validation
+            try:
+                detected_grid = self.get_detected_grid_content(frame)
+                if not detected_grid:
+                    print("❌ Failed to get detected grid content")
+                    return
+            except Exception as det_error:
+                print(f"❌ Detection error: {det_error}")
+                return
             
-            # Get player position and facing direction
-            with self.shared_env.lock:
-                player_pos = self.env._player.pos
-                player_facing = getattr(self.env._player, 'facing', [0, 1])  # Default facing down
+            # Get player position and facing direction with validation
+            try:
+                with self.shared_env.lock:
+                    player_pos = self.env._player.pos
+                    player_facing = getattr(self.env._player, 'facing', [0, 1])  # Default facing down
+            except Exception as player_error:
+                print(f"❌ Player state error: {player_error}")
+                return
             
             # Generate JSON scene summary for MCP context
-            scene_summary = self.generate_scene_summary_json(reference_grid, detected_grid, player_pos, player_facing, step_number)
-            
-            # Print JSON scene summary
-            print("\n" + "=" * 80)
-            print("📋 JSON SCENE SUMMARY FOR MCP CONTEXT")
-            print("=" * 80)
-            import json
-            print(json.dumps(scene_summary, indent=2, ensure_ascii=False))
-            print("=" * 80)
+            try:
+                scene_summary = self.generate_scene_summary_json(reference_grid, detected_grid, player_pos, player_facing, step_number)
+                
+                # Print JSON scene summary
+                print("\n" + "=" * 80)
+                print("📋 JSON SCENE SUMMARY FOR MCP CONTEXT")
+                print("=" * 80)
+                import json
+                print(json.dumps(scene_summary, indent=2, ensure_ascii=False))
+                print("=" * 80)
+            except Exception as json_error:
+                print(f"❌ JSON generation error: {json_error}")
             
             # Print simplified grid table with checkmarks
-            self.print_simplified_grid_table(reference_grid, detected_grid, player_pos, player_facing)
+            try:
+                self.print_simplified_grid_table(reference_grid, detected_grid, player_pos, player_facing)
+            except Exception as table_error:
+                print(f"❌ Grid table error: {table_error}")
             
             # Compare and analyze
-            comparison_result = self.compare_grid_contents(reference_grid, detected_grid)
+            try:
+                comparison_result = self.compare_grid_contents(reference_grid, detected_grid)
+            except Exception as comp_error:
+                print(f"❌ Comparison error: {comp_error}")
             
             if step_number == 0:
                 print(f"\n⏳ Initial observation complete. Ready for player actions...")
@@ -906,7 +976,9 @@ class GridContentChecker:
                 print(f"\n⏳ Step {step_number} analysis complete. Waiting for next action...")
                 
         except Exception as e:
-            print(f"❌ Error in observation: {e}")
+            print(f"❌ Critical error in observation: {e}")
+            import traceback
+            traceback.print_exc()
     
     def run_comparison(self):
         """Run the REAL grid content comparison with interactive GUI - Step-by-step detection"""
@@ -933,7 +1005,9 @@ class GridContentChecker:
             print()
             
             last_detected_step = -1  # Start from -1 to trigger initial observation
-            max_steps = 3000  # Increased step limit for more debugging
+            # Get max_steps from config file
+            step_settings = self.config.get('gym', {}).get('step_settings', {})
+            max_steps = step_settings.get('max_total_steps', 30000)  # Use config value or default to 30000
             
             # Perform initial observation before any player action
             print(f"\n--- Initial Observation (Step 0) ---")
@@ -941,22 +1015,48 @@ class GridContentChecker:
             self.perform_observation(0)  # Initial observation as step 0
             last_detected_step = 0
             
-            while self.gui_running and last_detected_step < max_steps:
+            total_steps_taken = 0  # Track total steps across all episodes
+            
+            while self.gui_running and total_steps_taken < max_steps:
                 # Check if a new game step has occurred
                 try:
                     current_step = getattr(self, 'game_step_count', 0)
                     
                     # Trigger detection when a new step occurs (player actions)
                     if current_step > last_detected_step:
+                        # Update total steps counter
+                        total_steps_taken += (current_step - last_detected_step)
                         last_detected_step = current_step
+                        
                         # Display step number for player actions (starting from 1)
                         display_step = current_step
                         
-                        print(f"\n--- Step {display_step} (Max: {max_steps}) ---")
+                        print(f"\n--- Episode Step {display_step} (Total: {total_steps_taken}/{max_steps}) ---")
                         print(f"🖼️ Game State Changed - Analyzing Grid Content")
                         
                         # Perform observation for this step
                         self.perform_observation(display_step)
+                        
+                        # Check if we've reached the maximum total steps after this observation
+                        if total_steps_taken >= max_steps:
+                            print(f"\n🏁 Reached maximum total steps ({max_steps}). Performing final observation...")
+                            # Perform one final observation to ensure consistency
+                            try:
+                                print(f"\n--- Final Step Analysis (Total: {total_steps_taken}) ---")
+                                print(f"🔍 Final game state validation before termination")
+                                self.perform_observation(display_step)
+                                print(f"✅ Final observation completed successfully")
+                            except Exception as final_error:
+                                print(f"❌ Error in final observation: {final_error}")
+                            break
+                    
+                    # Reset step tracking when episode resets (game_step_count goes back to 0)
+                    elif current_step < last_detected_step:
+                        print(f"🔄 Episode reset detected (step {current_step} < {last_detected_step})")
+                        last_detected_step = current_step - 1  # Set to current_step - 1 so next iteration will detect the step change
+                        # Don't reset total_steps_taken - it accumulates across episodes
+                        print(f"📝 Reset tracking: last_detected_step set to {last_detected_step}, current_step is {current_step}")
+                        print(f"🔄 New episode will be processed in next iteration")
                     
                     # Short sleep to prevent excessive CPU usage
                     time.sleep(0.1)
@@ -965,8 +1065,10 @@ class GridContentChecker:
                     print(f"❌ Error in step detection: {e}")
                     time.sleep(0.5)
             
-            if last_detected_step >= max_steps:
-                print(f"\n🏁 Reached maximum steps ({max_steps}). Stopping comparison.")
+            if total_steps_taken >= max_steps:
+                print(f"\n🏁 Comparison stopped at maximum total steps ({max_steps}).")
+            elif not self.gui_running:
+                print(f"\n🛑 GUI process ended. Total steps taken: {total_steps_taken}.")
                 
         except KeyboardInterrupt:
             print("\n🛑 Comparison stopped by user")

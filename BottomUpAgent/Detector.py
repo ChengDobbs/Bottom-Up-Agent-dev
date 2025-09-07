@@ -9,7 +9,7 @@ from PIL import Image
 from typing import List, Dict
 import os
 import pathlib
-from .CrafterGridExtractor import CrafterGridExtractor
+from .Eye import Eye
 from sklearn.metrics.pairwise import cosine_similarity
 from skimage.metrics import structural_similarity as ssim
 
@@ -108,22 +108,21 @@ class Detector:
             self.template_cache = {}
             self.assets_path = 'c:\\Users\\angus\\Documents\\Bottom-Up-Agent-dev\\crafter\\crafter\\assets'
             
-            # Initialize CrafterGridExtractor for parallel launcher and grid cutting
-            self.grid_extractor = CrafterGridExtractor(config)
+            self.eye = Eye(config)
             self.grid_extractor_enabled = True
-            print(f"✅ CrafterGridExtractor initialized with detection method: {self.detection_method}")
+            print(f"✅ Eye module initialized with grid extraction and detection method: {self.detection_method}")
         
         self.area_threshold = 0.03
 
         self.clip = CLIP(model_name=config['detector']['clip_model'], use_gpu=True)
     
-    def start_parallel_crafter_launcher(self, max_steps: int = 1000) -> bool:
+    def start_parallel_crafter_launcher(self, max_steps: int = None) -> bool:
         """
         Start parallel crafter_interactive_launcher for grid extraction.
         Only available when detector_type is 'crafter_api'.
         
         Args:
-            max_steps: Maximum steps for the launcher
+            max_steps: Maximum steps for the launcher (None to use config default)
             
         Returns:
             bool: True if started successfully, False otherwise
@@ -132,18 +131,25 @@ class Detector:
             print("❌ Parallel launcher only available for crafter_api detector type")
             return False
             
-        if not hasattr(self, 'grid_extractor'):
-            print("❌ CrafterGridExtractor not initialized")
+        if not hasattr(self, 'eye'):
+            print("❌ Eye module not initialized")
             return False
+        
+        # Use config default if max_steps not provided
+        if max_steps is None:
+            step_settings = self.config.get('gym', {}).get('step_settings', {})
+            max_steps = step_settings.get('max_total_steps', 1000)
+            print(f"📋 Using max_steps from config: {max_steps}")
             
-        return self.grid_extractor.start_parallel_launcher(max_steps)
+        return self.eye.start_parallel_launcher(max_steps)
     
     def stop_parallel_crafter_launcher(self):
         """
         Stop the parallel crafter_interactive_launcher.
         """
-        if hasattr(self, 'grid_extractor'):
-            self.grid_extractor.stop_parallel_launcher()
+        if hasattr(self, 'eye'):
+            # Eye module doesn't have parallel launcher functionality
+            print("ℹ️ Eye module doesn't support parallel launcher")
     
     def is_parallel_launcher_running(self) -> bool:
         """
@@ -152,8 +158,9 @@ class Detector:
         Returns:
             bool: True if running, False otherwise
         """
-        if hasattr(self, 'grid_extractor'):
-            return self.grid_extractor.is_launcher_running()
+        if hasattr(self, 'eye'):
+            # Eye module doesn't have parallel launcher functionality
+            return False
         return False
     
     def encode_image(self, img_cv):
@@ -266,11 +273,11 @@ class Detector:
         return objects
     
     def _extract_objects_grid_extractor(self, image):
-        """Original grid extractor method for fallback."""
+        """Grid extractor method using Eye module."""
         objects = []
-        if hasattr(self, 'grid_extractor') and self.grid_extractor_enabled:
+        if hasattr(self, 'eye') and self.grid_extractor_enabled:
             try:
-                grid_cells = self.grid_extractor.extract_grid_cells(image)
+                grid_cells = self.eye.extract_grid_cells(image)
                 for cell in grid_cells:
                     grid_pos = cell.get('grid_position', [0, 0])
                     obj = {
@@ -280,13 +287,13 @@ class Detector:
                         'center': cell['center'],
                         'image': cell['image'],
                         'grid_position': grid_pos,
-                        'cell_size': cell.get('cell_size', [44, 57]),
+                        'cell_size': cell.get('size', [44, 57]),
                         'confidence': 1.0,
-                        'source': 'crafter_grid_extractor'
+                        'source': 'eye_grid_extractor'
                     }
                     objects.append(obj)
             except Exception as e:
-                print(f"❌ Error in grid extractor: {e}")
+                print(f"❌ Error in Eye grid extractor: {e}")
         return objects
     
     def _extract_objects_similarity_matching(self, image):
@@ -296,8 +303,8 @@ class Detector:
             return objects
             
         try:
-            # Get grid cells from extractor
-            grid_cells = self.grid_extractor.extract_grid_cells(image)
+            # Get grid cells from Eye module
+            grid_cells = self.eye.extract_grid_cells(image)
             
             for cell in grid_cells:
                 cell_image = cell['image']
@@ -336,7 +343,7 @@ class Detector:
             player = self.crafter_env._player
             
             # Get grid cells for positioning
-            grid_cells = self.grid_extractor.extract_grid_cells(image)
+            grid_cells = self.eye.extract_grid_cells(image)
             
             for cell in grid_cells:
                 grid_pos = cell.get('grid_position', [0, 0])  # [row, col] format

@@ -59,8 +59,12 @@ gym:
   crafter_settings:
     area: [64, 64]      # World size
     view: [9, 9]        # View size around player
-    length: 10000       # Episode length
     seed: null          # Random seed (null for random)
+    
+  # Step control settings
+  step_settings:
+    max_total_steps: 30000    # Maximum total steps across all episodes
+    max_episode_steps: 10000  # Maximum steps per episode (Crafter episodes can run indefinitely)
 
 # Achievement tracking for Crafter
 achievements:

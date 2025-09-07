@@ -339,6 +339,18 @@ def demo_crafter_interactive(resolution='low', max_steps=10, config_path=None, n
     # Load configuration
     config = load_config(config_path) if config_path else load_config()
     
+    # Get step settings from config, with fallback to parameter
+    step_settings = config.get('gym', {}).get('step_settings', {})
+    if max_steps == 10:  # Default value, use config
+        max_steps = step_settings.get('max_total_steps', 30000)
+        print(f"📋 Using max_steps from config: {max_steps}")
+    else:
+        print(f"📋 Using parameter max_steps: {max_steps}")
+    
+    # Note: Crafter episodes run indefinitely until manually reset or terminated
+    # No artificial episode length limit is imposed by configuration
+    print(f"📋 Total demo steps limit: {max_steps}")
+    
     # Use config file resolution if available, otherwise use parameter
     config_resolution = config.get('gui', {}).get('resolution')
     if config_resolution:
@@ -424,7 +436,7 @@ def demo_crafter_interactive(resolution='low', max_steps=10, config_path=None, n
         step += 1
         episode_steps += 1
         total_steps += 1
-        print(f"\n--- Episode {episode_count}, Step {episode_steps} (Global: {total_steps}) ---")
+        print(f"\n--- Episode {episode_count}, Step {episode_steps} (Total: {step}/{max_steps}) ---")
         print(f"Episode reward: {episode_reward:.2f}, Total reward: {total_reward:.2f}")
         
         # Handle pygame events and keyboard input (only if GUI is enabled)

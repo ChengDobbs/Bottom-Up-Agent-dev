@@ -158,7 +158,9 @@ class GymBottomUpAgent(BottomUpAgent):
     def run_episode(self, task="Complete the game", max_steps: int = None, render=True, interactive_mode=False) -> Dict[str, Any]:
         """Run a single episode"""
         if max_steps is None:
-            max_steps = self.gym_config.get('max_episode_steps', 500)
+            # Get max_steps from config file
+            step_settings = self.config.get('gym', {}).get('step_settings', {})
+            max_steps = step_settings.get('max_total_steps', 30000)
         
         # Reset environment
         obs = self.reset_environment()
@@ -258,11 +260,16 @@ class GymBottomUpAgent(BottomUpAgent):
         
         return episode_stats
     
-    def start_crafter_interactive_with_detection(self, max_steps=3000):
+    def start_crafter_interactive_with_detection(self, max_steps=None):
         """启动Crafter交互式模式，支持并行GUI和检测分析"""
         if self.env_name.lower() != 'crafter':
             print(f"❌ 交互式检测模式仅支持Crafter环境，当前环境: {self.env_name}")
             return None
+            
+        if max_steps is None:
+            # Get max_steps from config file
+            step_settings = self.config.get('gym', {}).get('step_settings', {})
+            max_steps = step_settings.get('max_total_steps', 30000)
             
         from demos.demo_grid_content_check import GridContentChecker
         import threading
@@ -274,13 +281,10 @@ class GymBottomUpAgent(BottomUpAgent):
         print("🔍 实时对比GUI环境与检测系统的网格内容")
         print()
         
-        # 创建网格内容检查器
         checker = GridContentChecker(self.config)
         
-        # 启动并行GUI进程
         checker.start_gui_process()
         
-        # 等待GUI初始化
         time.sleep(3)
         
         episode_stats = {
@@ -295,19 +299,14 @@ class GymBottomUpAgent(BottomUpAgent):
             while checker.gui_running and step_count < max_steps:
                 step_count += 1
                 
-                # 获取当前游戏状态
                 current_obs = self.get_observation()
                 
-                # 获取参考网格内容（真实游戏状态）
                 reference_grid = checker.get_reference_grid_content()
                 
-                # 获取检测到的网格内容
                 detected_grid = checker.get_detected_grid_content(current_obs['screen'])
                 
-                # 比较网格内容
                 comparison = checker.compare_grid_contents(reference_grid, detected_grid)
                 
-                # 每10步打印一次详细分析
                 if step_count % 10 == 0:
                     print(f"\n📊 Step {step_count} - 检测准确率: {comparison['accuracy']:.1f}%")
                     print(f"   匹配: {comparison['matches']}, 不匹配: {comparison['mismatches']}")
@@ -336,11 +335,16 @@ class GymBottomUpAgent(BottomUpAgent):
         
         return episode_stats
     
-    def start_crafter_interactive_launcher(self, max_steps=1000, resolution='medium', no_gui=False):
+    def start_crafter_interactive_launcher(self, max_steps=None, resolution='medium', no_gui=False):
         """启动纯Crafter交互式游戏模式（直接调用launcher）"""
         if self.env_name.lower() != 'crafter':
             print(f"❌ Crafter交互式模式仅支持Crafter环境，当前环境: {self.env_name}")
             return None
+            
+        if max_steps is None:
+            # Get max_steps from config file
+            step_settings = self.config.get('gym', {}).get('step_settings', {})
+            max_steps = step_settings.get('max_total_steps', 30000)
             
         from demos.crafter_interactive_launcher import demo_crafter_interactive
         
@@ -507,8 +511,13 @@ class GymBottomUpAgent(BottomUpAgent):
         print(f"\n🏁 混合模式结束: {shared_state['steps']} 步, {shared_state['total_reward']:.2f} 总奖励")
         return episode_stats
     
-    def run_interactive(self, max_steps=3000):
+    def run_interactive(self, max_steps=None):
         """Run interactive mode with GUI control and detection analysis"""
+        if max_steps is None:
+            # Get max_steps from config file
+            step_settings = self.config.get('gym', {}).get('step_settings', {})
+            max_steps = step_settings.get('max_total_steps', 30000)
+            
         import pygame
         import threading
         import time
@@ -820,12 +829,6 @@ def create_gym_agent(env_name: str, config_path: str = None) -> GymBottomUpAgent
     
     config['gym_environment']['env_name'] = actual_env_name
     config['game_name'] = actual_env_name
-    
-    # Ensure required config fields exist
-    if 'run_name' not in config:
-        config['run_name'] = f"{actual_env_name}_interactive"
-    if 'project_name' not in config:
-        config['project_name'] = "BottomUpAgent"
     
     return GymBottomUpAgent(config)
 

@@ -32,6 +32,17 @@ class Eye:
             self.display = display.Display()
         else:
             self.display = None
+            
+        # Grid extraction configuration
+        self.grid_config = config.get('grid', {})
+        self.grid_rows = self.grid_config.get('rows', 9)
+        self.grid_cols = self.grid_config.get('cols', 9)
+        self.detection_size = self.grid_config.get('detection_size', 64)
+        self.resolution = self.grid_config.get('resolution', 64)
+        
+        # Calculate cell dimensions based on screen size
+        self.cell_width = self.width // self.grid_cols
+        self.cell_height = self.height // self.grid_rows
 
     def _find_window_linux(self, window_name):
 
@@ -201,3 +212,172 @@ class Eye:
         # e.g., the button area, the text area, the input area, etc.
         # i.e., saliency and heatmap method
         return change_ratio
+    
+    def extract_grid_cells(self, screen: np.ndarray = None) -> list:
+        """
+        Extract individual grid cells from the screen as objects
+        
+        Args:
+            screen: Screen image to extract from (if None, captures new screenshot)
+            
+        Returns:
+            List of grid cell objects with images and metadata
+        """
+        if screen is None:
+            screen = self.get_screenshot_cv()
+            if screen is None:
+                return []
+        
+        grid_objects = []
+        
+        try:
+            # Extract each grid cell
+            for row in range(self.grid_rows):
+                for col in range(self.grid_cols):
+                    # Calculate cell boundaries
+                    x1 = col * self.cell_width
+                    y1 = row * self.cell_height
+                    x2 = min(x1 + self.cell_width, screen.shape[1])
+                    y2 = min(y1 + self.cell_height, screen.shape[0])
+                    
+                    # Extract cell image from screen
+                    cell_image = screen[y1:y2, x1:x2]
+                    
+                    # Resize cell image to detection size for consistent processing
+                    if cell_image.size > 0:
+                        cell_image_resized = cv2.resize(cell_image, (self.detection_size, self.detection_size))
+                    else:
+                        cell_image_resized = cell_image
+                    
+                    # Create grid object
+                    grid_obj = {
+                        'type': 'grid_cell',
+                        'detector_type': 'eye_grid_extractor',
+                        'grid_position': [row, col],
+                        'bbox': [x1, y1, x2, y2],
+                        'center': [(x1 + x2) // 2, (y1 + y2) // 2],
+                        'size': [x2 - x1, y2 - y1],
+                        'image': cell_image_resized,  # Use resized image for detection
+                        'original_image': cell_image,  # Keep original for reference
+                        'confidence': 1.0,
+                        'metadata': {
+                            'cell_id': f"cell_{row}_{col}",
+                            'resolution': self.resolution,
+                            'screen_cell_size': [x2 - x1, y2 - y1],  # Actual screen size
+                            'detection_size': [self.detection_size, self.detection_size]  # Detection size
+                        }
+                    }
+                    
+                    grid_objects.append(grid_obj)
+            
+            print(f"🎯 Extracted {len(grid_objects)} grid cells from {self.grid_rows}x{self.grid_cols} grid")
+            return grid_objects
+            
+        except Exception as e:
+             print(f"❌ Error extracting grid cells: {e}")
+             return []
+    
+    def get_cell_at_position(self, x: int, y: int, screen: np.ndarray = None):
+        """
+        Get the grid cell at a specific screen position
+        
+        Args:
+            x, y: Screen coordinates
+            screen: Screen image (if None, captures new screenshot)
+            
+        Returns:
+            Grid cell object at the position, or None if out of bounds
+        """
+        # Calculate grid position
+        col = x // self.cell_width
+        row = y // self.cell_height
+        
+        if 0 <= row < self.grid_rows and 0 <= col < self.grid_cols:
+            grid_cells = self.extract_grid_cells(screen)
+            cell_index = row * self.grid_cols + col
+            if cell_index < len(grid_cells):
+                return grid_cells[cell_index]
+        
+        return None
+    
+    def analyze_cell_content(self, cell_obj: dict) -> dict:
+        """
+        Analyze the content of a grid cell using basic image processing
+        
+        Args:
+            cell_obj: Grid cell object with image data
+            
+        Returns:
+            Analysis results with detected features
+        """
+        try:
+            cell_image = cell_obj['image']
+            
+            # Basic image analysis
+            gray = cv2.cvtColor(cell_image, cv2.COLOR_RGB2GRAY)
+            
+            # Calculate basic statistics
+            mean_intensity = np.mean(gray)
+            std_intensity = np.std(gray)
+            
+            # Detect edges
+            edges = cv2.Canny(gray, 50, 150)
+            edge_density = np.sum(edges > 0) / edges.size
+            
+            # Color analysis
+            dominant_color = np.mean(cell_image, axis=(0, 1))
+            
+            analysis = {
+                'mean_intensity': float(mean_intensity),
+                'std_intensity': float(std_intensity),
+                'edge_density': float(edge_density),
+                'dominant_color': dominant_color.tolist(),
+                'has_content': mean_intensity > 50 and std_intensity > 10,
+                'is_uniform': std_intensity < 5
+            }
+            
+            # Update cell object with analysis
+            cell_obj['analysis'] = analysis
+            
+            return analysis
+            
+        except Exception as e:
+            print(f"❌ Error analyzing cell content: {e}")
+            return {}
+    
+    def extract_grid_objects(self, screen: np.ndarray = None) -> list:
+        """
+        Extract grid cell objects from the screen for BottomUpAgent framework
+        
+        Args:
+            screen: Screen image to extract from (if None, captures new screenshot)
+            
+        Returns:
+            List of grid objects in BottomUpAgent format
+        """
+        try:
+            grid_cells = self.extract_grid_cells(screen)
+            
+            # Convert grid cells to BottomUpAgent object format
+            grid_objects = []
+            for cell in grid_cells:
+                row, col = cell['grid_position']
+                grid_obj = {
+                    'id': f"grid_{row}_{col}",
+                    'type': 'grid_cell',
+                    'content': f"Grid[{row},{col}]",
+                    'center': cell['center'],
+                    'bbox': cell['bbox'],
+                    'interactivity': 'clickable',
+                    'source': 'grid_slice',
+                    'grid_position': [row, col],
+                    'cell_image': cell['image'],
+                    'metadata': cell.get('analysis', {})
+                }
+                grid_objects.append(grid_obj)
+            
+            return grid_objects
+            
+        except Exception as e:
+            print(f"❌ Error in extract_grid_objects: {e}")
+            return []
