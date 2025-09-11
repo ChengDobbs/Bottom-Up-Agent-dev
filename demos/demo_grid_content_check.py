@@ -620,16 +620,8 @@ class GridContentChecker:
         except Exception as e:
             print(f"⚠️ Could not get inventory: {e}")
         
-        # Find player's grid position
-        player_grid_pos = None
-        for row in range(self.grid_rows):
-            for col in range(self.grid_cols):
-                world_pos = reference_grid.get((row, col), {}).get('world_pos', [0, 0])
-                if world_pos[0] == player_pos[0] and world_pos[1] == player_pos[1]:
-                    player_grid_pos = [row, col]
-                    break
-            if player_grid_pos:
-                break
+        # Find player's grid position (center of 7x9 grid)
+        player_grid_pos = [3, 4]  # Player is always at center of grid
         
         # Get immediate surroundings (only non-empty cells)
         surroundings = {}
@@ -663,8 +655,6 @@ class GridContentChecker:
             for col in range(self.grid_cols):
                 ref_content = reference_grid.get((row, col), {}).get('type', 'empty')
                 det_content = detected_grid.get((row, col), {}).get('type', 'empty')
-                ref_cell = reference_grid.get((row, col), {})
-                world_pos = ref_cell.get('world_pos', [0, 0])
                 
                 total_cells += 1
                 if ref_content == det_content:
@@ -677,8 +667,7 @@ class GridContentChecker:
                     if ref_content not in element_positions:
                         element_positions[ref_content] = []
                     element_positions[ref_content].append({
-                        "grid_pos": [row, col],
-                        "world_pos": world_pos
+                        "grid_pos": [row, col]
                     })
         
         detection_accuracy = round((detection_accuracy / total_cells) * 100, 1) if total_cells > 0 else 0

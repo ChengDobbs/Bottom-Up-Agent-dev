@@ -14,6 +14,7 @@ class Brain:
     def __init__(self, config, detector, logger):
         self.game_name = config['game_name']
         self.model_name = config['brain']['base_model']
+        self.config = config  # Store config for dynamic tool loading
         # Set timeout for API calls to prevent hanging
         api_timeout = config.get('api_timeout', 60)
         self.base_model = creat_base_model(config['brain']['base_model'], timeout=api_timeout)
@@ -30,18 +31,42 @@ class Brain:
         self.skill_evaluate_tools = FunctionCalls.skill_evaluate_tools(config['brain']['evaluate_model'])
         self.skill_evaluate2_tools = FunctionCalls.skill_evaluate2_tools(config['brain']['evaluate_model'])
         
-        # MCP-style interaction tools
+        # MCP-style interaction tools with dynamic configuration
         self.environment_query_tools = FunctionCalls.environment_query_tools(config['brain']['base_model'])
-        self.mcp_interaction_tools = FunctionCalls.mcp_interaction_tools(config['brain']['base_model'])
+        # Initialize with full_mode by default, can be changed dynamically
+        self.mcp_interaction_tools = FunctionCalls.mcp_interaction_tools(config['brain']['base_model'], mode='full_mode')
+        self.current_mcp_mode = 'full_mode'  # Track current mode
 
         self.uct_c = config['brain']['uct_c']
         self.uct_threshold = config['brain']['uct_threshold']
-        self.max_mcp_iter = config.get('mcp', {}).get('max_iter', 8)
+        self.max_mcp_iter = config.get('mcp', {}).get('max_iter', 6)
         
         # 🧠 MCP Historical Context Management
         self.mcp_conversation_history = []  # Persistent conversation history across MCP calls
         self.max_history_length = config.get('mcp', {}).get('max_history_length', 20)  # Keep last 20 interactions
         self.context_retention_threshold = config.get('mcp', {}).get('context_retention_threshold', 0.7)  # Similarity threshold for context reuse
+    
+    def switch_mcp_mode(self, mode):
+        """
+        Dynamically switch MCP tool mode based on game state or phase
+        Available modes: combat_mode, map_mode, reward_mode, shop_mode, exploration_mode, skill_learning_mode, full_mode
+        """
+        if mode != self.current_mcp_mode:
+            self.logger.info(f"Switching MCP mode from '{self.current_mcp_mode}' to '{mode}'")
+            self.mcp_interaction_tools = FunctionCalls.mcp_interaction_tools(self.model_name, mode=mode)
+            self.current_mcp_mode = mode
+            return True
+        return False
+    
+    def get_available_mcp_modes(self):
+        """
+        Get list of available MCP modes from configuration
+        """
+        mcp_config = FunctionCalls.load_mcp_tools_config()
+        if mcp_config:
+            # Return all mode keys that end with '_mode'
+            return [key for key in mcp_config.keys() if key.endswith('_mode')]
+        return ['full_mode']  # Default fallback
 
     def select_skill_cluster(self, step, ob, skills):
         # select id name description from skills
@@ -288,6 +313,12 @@ class Brain:
         state_embedding1 = state1['state_feature']
         state_embedding2 = state2['state_feature']
 
+        # Ensure embeddings are 2D arrays for cosine_similarity
+        if len(state_embedding1.shape) == 1:
+            state_embedding1 = state_embedding1.reshape(1, -1)
+        if len(state_embedding2.shape) == 1:
+            state_embedding2 = state_embedding2.reshape(1, -1)
+
         similarity = cosine_similarity(state_embedding1, state_embedding2)[0][0]
 
         print(f"State similarity: {similarity}, threshold: {threshold}")
@@ -404,6 +435,8 @@ class Brain:
             return self._format_object_summary_enhanced(detected_objects)
         elif query_type == "game_state":
             return self._analyze_game_state(detected_objects)
+        elif query_type == "scene_summary":
+            return self._generate_scene_summary(detected_objects)
         else:
             return "Invalid query type or missing object_id for specific_object query"
     
@@ -419,12 +452,189 @@ class Brain:
             result += f"Interactivity: {obj.get('interactivity', 'unknown')}\n"
         return result
     
+    def _generate_scene_summary(self, detected_objects, inventory=None, game_state=None):
+        """Generate general scene summary for MCP tools - delegates to game-specific methods when available"""
+        if not detected_objects:
+            return {
+                "scene_type": "empty",
+                "total_objects": 0,
+                "message": "No objects detected in current view."
+            }
+        
+        # Check if this is Crafter game and use specialized format
+        if hasattr(self, 'config') and self.config.get('game_name') == 'Crafter':
+            return self._generate_crafter_scene_summary(detected_objects, inventory, game_state)
+        
+        # General scene summary for other games (placeholder for future expansion)
+        object_counts = {}
+        detailed_objects = []
+        
+        for obj in detected_objects:
+            obj_type = obj.get('type', 'unknown')
+            obj_name = obj.get('name', obj.get('content', 'N/A'))
+            center = obj.get('center', [0, 0])
+            
+            # Create detailed object entry
+            detailed_obj = {
+                "id": obj.get('id'),
+                "type": obj_type,
+                "name": obj_name,
+                "center": center,
+                "interactivity": obj.get('interactivity', 'unknown'),
+                "content": obj.get('content', '')
+            }
+            detailed_objects.append(detailed_obj)
+            
+            # Count object types
+            object_counts[obj_type] = object_counts.get(obj_type, 0) + 1
+        
+        # Build general scene summary
+        scene_data = {
+            "scene_type": "general_environment",
+            "total_objects": len(detected_objects),
+            "detailed_objects": detailed_objects,
+            "object_counts": object_counts
+        }
+        
+        # Add inventory information if available
+        if inventory:
+            scene_data["inventory"] = inventory
+        
+        # Add game state information if available
+        if game_state:
+            scene_data["game_state"] = game_state
+        
+        return scene_data
+    
+    def _generate_crafter_scene_summary(self, detected_objects, inventory=None, game_state=None):
+        """Generate simplified scene summary specifically for Crafter game"""
+        # Use grid_position from detected objects if available, otherwise convert coordinates
+        def get_grid_position(obj):
+            """Get grid position from object, preferring grid_position field over coordinate conversion"""
+            # First try to use grid_position from detector (more accurate)
+            if 'grid_position' in obj:
+                grid_pos = obj['grid_position']
+                # grid_position is [row, col], return as tuple
+                return (grid_pos[0], grid_pos[1])
+            
+            # Fallback to coordinate conversion if grid_position not available
+            center = obj.get('center', [0, 0])
+            # Simple conversion assuming standard Crafter grid layout
+            grid_x = max(0, min(6, int(center[0] / 64)))  # Assuming ~64px per grid cell
+            grid_y = max(0, min(8, int(center[1] / 64)))  # Assuming ~64px per grid cell
+            return (grid_x, grid_y)
+        
+        # Simplified object categorization for Crafter
+        object_counts = {}
+        player_info = None
+        grid_map = {}  # grid_pos -> [object_types]
+        
+        # Crafter's three-layer classification (simplified)
+        materials = []  # Terrain layer: grass, stone, tree, water, sand, path, coal, iron, diamond, lava
+        objects = []    # Item layer: fence, plant, arrow, table, furnace
+        creatures = []  # Entity layer: cow, zombie, skeleton, player
+        
+        for obj in detected_objects:
+            obj_type = obj.get('type', 'unknown')
+            grid_pos = get_grid_position(obj)
+            
+            # Initialize grid position if not exists
+            if grid_pos not in grid_map:
+                grid_map[grid_pos] = []
+            
+            # Avoid duplicate entries in the same grid position
+            if obj_type not in grid_map[grid_pos]:
+                grid_map[grid_pos].append(obj_type)
+            
+            # Count object types
+            object_counts[obj_type] = object_counts.get(obj_type, 0) + 1
+            
+            # Find player position and direction
+            if 'player' in obj_type.lower():
+                direction = obj_type.split('-')[-1] if '-' in obj_type else 'unknown'
+                player_info = {
+                    'position': grid_pos,
+                    'direction': direction
+                }
+                creatures.append(f"{obj_type}@{grid_pos}")
+            
+            # Categorize by Crafter's three-layer system
+            elif obj_type in ['grass', 'stone', 'tree', 'water', 'sand', 'path', 'coal', 'iron', 'diamond', 'lava']:
+                materials.append(f"{obj_type}@{grid_pos}")
+            elif obj_type in ['fence', 'plant', 'arrow', 'table', 'furnace']:
+                objects.append(f"{obj_type}@{grid_pos}")
+            elif obj_type in ['cow', 'zombie', 'skeleton']:
+                creatures.append(f"{obj_type}@{grid_pos}")
+        
+        # Build simplified JSON scene summary for Crafter
+        scene_data = {
+            "scene_type": "crafter_environment",
+            "coordinate_system": "IMPORTANT: All positions use (row, col) format where (0,0) is top-left. Movement: UP=row-1, DOWN=row+1, LEFT=col-1, RIGHT=col+1",
+            "total_objects": len(detected_objects),
+            "grid_size": "7x9",
+            "player_info": player_info,
+            "object_counts": object_counts,
+            # "grid_map": {f"{pos[0]},{pos[1]}": objects for pos, objects in grid_map.items()},
+            "layers": {
+                "materials": {
+                    "count": len(materials),
+                    "items": materials
+                },
+                "objects": {
+                    "count": len(objects),
+                    "items": objects
+                },
+                "creatures": {
+                    "count": len(creatures),
+                    "items": creatures
+                }
+            }
+        }
+        
+        # Add inventory information (simplified)
+        if inventory:
+            inv_items = {k: v for k, v in inventory.items() if v > 0}
+            scene_data["inventory"] = inv_items
+        
+        # Add game state information (only key stats)
+        if game_state:
+            key_stats = {}
+            for key, value in game_state.items():
+                if key in ['health', 'food', 'water', 'energy']:
+                    key_stats[key] = value
+            if key_stats:
+                scene_data["stats"] = key_stats
+        
+        # Add important objects summary (exclude grass/empty)
+        important_objects = {k: v for k, v in object_counts.items() if k not in ['grass', 'empty']}
+        if important_objects:
+            scene_data["important_objects"] = important_objects
+        
+        # Add nearby objects around player (within 1 grid distance)
+        if player_info:
+            player_pos = player_info['position']
+            nearby_objects = []
+            for pos, objs in grid_map.items():
+                # Check if position is within 1 grid distance from player
+                if abs(pos[0] - player_pos[0]) <= 1 and abs(pos[1] - player_pos[1]) <= 1:
+                    for obj_type in objs:
+                        if obj_type not in ['grass', 'empty']:
+                            nearby_objects.append(f"{obj_type}@{pos}")
+            if nearby_objects:
+                scene_data["nearby_objects"] = nearby_objects
+        
+        return scene_data
+    
     def _format_all_objects_enhanced(self, detected_objects):
         """Enhanced all objects formatting with intelligent categorization"""
         if not detected_objects:
             return "No objects detected in current screen."
         
-        # Categorize objects by likely function
+        # Game-specific filtering for Crafter
+        if self.game_name.lower() in ['crafter']:
+            return self._format_crafter_objects(detected_objects)
+        
+        # Categorize objects by likely function for other games
         cards = []
         buttons = []
         ui_elements = []
@@ -477,6 +687,127 @@ class Brain:
             result += "\n\n"
         
         result += "💡 RECOMMENDATION: Focus on cards/actions for gameplay, buttons for navigation."
+        return result
+    
+    def _format_crafter_objects(self, detected_objects):
+        """Format objects specifically for Crafter game, filtering out irrelevant UI elements"""
+        if not detected_objects:
+            return "No objects detected in current screen."
+        
+        # Filter objects relevant to Crafter gameplay
+        grid_objects = []  # High priority: actual game world objects
+        resources = []
+        creatures = []
+        structures = []
+        inventory_items = []
+        other_objects = []  # Lower priority: UI elements, etc.
+        
+        for obj in detected_objects:
+            content = obj.get('content', '').strip().lower()
+            obj_type = obj.get('type', 'unknown').lower()
+            source = obj.get('source', '')
+            
+            # Skip irrelevant UI elements like buttons, menus, etc.
+            if any(skip_word in content for skip_word in ['button', 'menu', 'ui', 'interface', 'panel']):
+                continue
+            
+            # PRIORITY 1: Grid-based objects from direct API (highest priority)
+            if source == 'direct_api' or obj.get('grid_position') is not None:
+                # Categorize by object type (from Crafter API)
+                if obj_type in ['grass', 'path', 'sand', 'lava', 'water']:
+                    # Terrain - lower priority within grid objects
+                    if obj_type != 'grass':  # Skip grass as it's common
+                        grid_objects.append(obj)
+                elif obj_type in ['tree', 'stone', 'coal', 'iron', 'diamond']:
+                    resources.append(obj)
+                elif obj_type in ['cow', 'pig', 'zombie', 'skeleton', 'spider']:
+                    creatures.append(obj)
+                elif obj_type in ['furnace', 'table', 'plant']:
+                    structures.append(obj)
+                elif obj_type not in ['empty', 'out_of_bounds']:
+                    # Any other non-empty grid object
+                    grid_objects.append(obj)
+            
+            # PRIORITY 2: Content-based categorization (for non-grid objects)
+            elif any(resource in content for resource in ['wood', 'stone', 'iron', 'coal', 'diamond', 'water', 'food']):
+                resources.append(obj)
+            elif any(creature in content for creature in ['cow', 'pig', 'zombie', 'skeleton', 'spider']):
+                creatures.append(obj)
+            elif any(structure in content for structure in ['tree', 'rock', 'furnace', 'table', 'plant']):
+                structures.append(obj)
+            elif any(tool in content for tool in ['pickaxe', 'sword', 'axe']):
+                inventory_items.append(obj)
+            else:
+                # Include other objects with valid positions
+                if obj.get('center'):
+                    other_objects.append(obj)
+        
+        total_relevant = len(grid_objects + resources + creatures + structures + inventory_items)
+        result = f"🎮 CRAFTER WORLD ANALYSIS ({len(detected_objects)} total, {total_relevant} relevant):\n"
+        result += "📍 COORDINATE SYSTEM: All positions use (row, col) format where (0,0) is top-left. Movement: UP=row-1, DOWN=row+1, LEFT=col-1, RIGHT=col+1\n\n"
+        
+        # HIGH PRIORITY: Resources (most important for gameplay)
+        if resources:
+            result += f"🪨 RESOURCES ({len(resources)}) [HIGH PRIORITY]: "
+            for res in resources[:8]:  # Show more resources
+                pos = res.get('grid_position', res.get('center', 'unknown'))
+                obj_type = res.get('type', res.get('content', 'resource'))
+                result += f"[{obj_type} @{pos}] "
+            if len(resources) > 8:
+                result += f"... +{len(resources)-8} more"
+            result += "\n\n"
+        
+        # HIGH PRIORITY: Creatures (important for interaction)
+        if creatures:
+            result += f"🐄 CREATURES ({len(creatures)}) [HIGH PRIORITY]: "
+            for creature in creatures[:5]:
+                pos = creature.get('grid_position', creature.get('center', 'unknown'))
+                obj_type = creature.get('type', creature.get('content', 'creature'))
+                result += f"[{obj_type} @{pos}] "
+            if len(creatures) > 5:
+                result += f"... +{len(creatures)-5} more"
+            result += "\n\n"
+        
+        # MEDIUM PRIORITY: Structures
+        if structures:
+            result += f"🏗️ STRUCTURES ({len(structures)}) [MEDIUM PRIORITY]: "
+            for struct in structures[:6]:
+                pos = struct.get('grid_position', struct.get('center', 'unknown'))
+                obj_type = struct.get('type', struct.get('content', 'structure'))
+                result += f"[{obj_type} @{pos}] "
+            if len(structures) > 6:
+                result += f"... +{len(structures)-6} more"
+            result += "\n\n"
+        
+        # MEDIUM PRIORITY: Grid objects (terrain, etc.)
+        if grid_objects:
+            result += f"🌍 GRID OBJECTS ({len(grid_objects)}) [MEDIUM PRIORITY]: "
+            for obj in grid_objects[:6]:  # Show more grid objects
+                pos = obj.get('grid_position', obj.get('center', 'unknown'))
+                obj_type = obj.get('type', 'unknown')
+                result += f"[{obj_type} @{pos}] "
+            if len(grid_objects) > 6:
+                result += f"... +{len(grid_objects)-6} more"
+            result += "\n\n"
+        
+        # LOW PRIORITY: Inventory items
+        if inventory_items:
+            result += f"🔧 TOOLS/ITEMS ({len(inventory_items)}): "
+            for item in inventory_items:
+                result += f"[{item.get('content', item.get('type', 'item'))}] "
+            result += "\n\n"
+        
+        # LOWEST PRIORITY: Other objects
+        if other_objects:
+            result += f"🎯 OTHER OBJECTS ({len(other_objects)}): "
+            for obj in other_objects[:2]:  # Limit to first 2
+                pos = obj.get('grid_position', obj.get('center', 'unknown'))
+                result += f"[ID:{obj.get('id')} @{pos}] "
+            if len(other_objects) > 2:
+                result += f"... +{len(other_objects)-2} more"
+            result += "\n\n"
+        
+        result += "💡 CRAFTER TIP: Focus on RESOURCES (highest priority) for crafting, CREATURES for food/combat, STRUCTURES for interaction. Grid objects show exact world state."
         return result
 
     def _query_historical_context(self, context_query=None):
@@ -533,7 +864,7 @@ class Brain:
                                   context_query.lower() in f['query_type'].lower()]
             
             for finding in relevant_findings[:2]:  # Show top 2 relevant findings
-                result += f"   - {finding['query_type']}: {finding['result_preview'][:100]}...\n"
+                result += f"   - {finding['query_type']}: {finding['result_preview'][:300]}...\n"
             
             result += "\n"
         
@@ -742,76 +1073,112 @@ class Brain:
         return result
     
     def _analyze_game_state(self, detected_objects):
-        """Analyze current game state for strategic decision making"""
+        """Analyze current game state with Crafter-style evaluation system"""
         if not detected_objects:
             return "Cannot analyze game state - no objects detected."
         
+        # Initialize Crafter-style analysis
         analysis = {
-            'phase': 'unknown',
-            'available_actions': [],
-            'resources': {},
-            'threats': [],
-            'opportunities': []
+            'inventory_items': 0,
+            'available_resources': [],
+            'crafting_opportunities': [],
+            'survival_status': 'stable',
+            'exploration_potential': 0,
+            'achievement_progress': 0
         }
         
-        # Analyze objects for game state clues
+        # Analyze detected objects for Crafter-specific elements
+        resource_types = ['wood', 'stone', 'coal', 'iron', 'diamond', 'sapling']
+        creature_types = ['cow', 'zombie', 'skeleton']
+        structure_types = ['table', 'furnace', 'plant']
+        
         for obj in detected_objects:
-            content = obj.get('content', '').strip().lower()
-            center = obj.get('center', [0, 0])
+            obj_class = obj.get('class', '').lower()
+            content = obj.get('content', '').lower()
             
-            # Detect game phase
-            if 'end turn' in content:
-                analysis['phase'] = 'player_turn'
-            elif 'enemy turn' in content or 'opponent' in content:
-                analysis['phase'] = 'enemy_turn'
+            # Count available resources
+            for resource in resource_types:
+                if resource in obj_class or resource in content:
+                    if resource not in analysis['available_resources']:
+                        analysis['available_resources'].append(resource)
             
-            # Detect available actions
-            if any(action in content for action in ['attack', 'defend', 'play', 'use']):
-                analysis['available_actions'].append({
-                    'action': content[:20],
-                    'position': center,
-                    'id': obj.get('id')
-                })
+            # Detect crafting opportunities
+            if any(structure in obj_class for structure in structure_types):
+                analysis['crafting_opportunities'].append(obj_class)
             
-            # Detect resources (energy, health, etc.)
-            if '/' in content and any(c.isdigit() for c in content):
-                analysis['resources'][f'resource_{len(analysis["resources"])}'] = content
-            
-            # Detect threats/opportunities
-            if any(threat in content for threat in ['damage', 'attack', 'vulnerable']):
-                analysis['threats'].append(content[:30])
-            elif any(opp in content for opp in ['heal', 'block', 'energy', 'draw']):
-                analysis['opportunities'].append(content[:30])
+            # Count exploration potential (new areas, unexplored objects)
+            if obj.get('confidence', 0) > 0.8:  # High confidence objects
+                analysis['exploration_potential'] += 1
         
-        # Generate strategic summary
-        result = f"🎮 GAME STATE ANALYSIS:\n\n"
-        result += f"Phase: {analysis['phase'].upper()}\n"
-        result += f"Available Actions: {len(analysis['available_actions'])}\n"
-        result += f"Resources Detected: {len(analysis['resources'])}\n"
-        result += f"Threats: {len(analysis['threats'])}\n"
-        result += f"Opportunities: {len(analysis['opportunities'])}\n\n"
+        # Analyze inventory if available
+        inventory = getattr(detected_objects, 'inventory', {}) if hasattr(detected_objects, 'inventory') else {}
+        if isinstance(detected_objects, dict) and 'inventory' in detected_objects:
+            inventory = detected_objects['inventory']
+        elif isinstance(detected_objects, list) and len(detected_objects) > 0:
+            # Try to extract inventory from first object if it's a dict
+            first_obj = detected_objects[0]
+            if isinstance(first_obj, dict) and 'inventory' in first_obj:
+                inventory = first_obj['inventory']
         
-        if analysis['available_actions']:
-            result += "⚔️ AVAILABLE ACTIONS:\n"
-            for action in analysis['available_actions'][:3]:
-                result += f"  • {action['action']} @{action['position']} (ID:{action['id']})\n"
+        if inventory:
+            analysis['inventory_items'] = sum(1 for item, count in inventory.items() if count > 0)
+            
+            # Calculate survival status based on health/food/drink
+            health = inventory.get('health', 9)
+            food = inventory.get('food', 9)
+            drink = inventory.get('drink', 9)
+            
+            if health < 3 or food < 3 or drink < 3:
+                analysis['survival_status'] = 'critical'
+            elif health < 6 or food < 6 or drink < 6:
+                analysis['survival_status'] = 'warning'
+            else:
+                analysis['survival_status'] = 'stable'
+            
+            # Estimate achievement progress based on inventory diversity
+            tool_items = ['wood_pickaxe', 'stone_pickaxe', 'iron_pickaxe', 'wood_sword', 'stone_sword', 'iron_sword']
+            resource_items = ['wood', 'stone', 'coal', 'iron', 'diamond']
+            
+            tools_owned = sum(1 for tool in tool_items if inventory.get(tool, 0) > 0)
+            resources_owned = sum(1 for resource in resource_items if inventory.get(resource, 0) > 0)
+            
+            # Simple achievement progress estimation (0-100%)
+            analysis['achievement_progress'] = min(100, (tools_owned * 15) + (resources_owned * 10) + (analysis['inventory_items'] * 5))
+        
+        # Generate Crafter-style evaluation report
+        result = f"🎮 CRAFTER EVALUATION:\n\n"
+        result += f"📦 Inventory Items: {analysis['inventory_items']}\n"
+        result += f"🌲 Available Resources: {len(analysis['available_resources'])} types\n"
+        result += f"🔨 Crafting Opportunities: {len(analysis['crafting_opportunities'])}\n"
+        result += f"❤️ Survival Status: {analysis['survival_status'].upper()}\n"
+        result += f"🗺️ Exploration Potential: {analysis['exploration_potential']} objects\n"
+        result += f"🏆 Achievement Progress: {analysis['achievement_progress']:.0f}%\n\n"
+        
+        # Show available resources
+        if analysis['available_resources']:
+            result += "🌲 NEARBY RESOURCES:\n"
+            for resource in analysis['available_resources'][:5]:  # Show top 5
+                result += f"  • {resource.title()}\n"
             result += "\n"
         
-        if analysis['resources']:
-            result += "💎 RESOURCES:\n"
-            for res_name, res_value in analysis['resources'].items():
-                result += f"  • {res_value}\n"
+        # Show crafting opportunities
+        if analysis['crafting_opportunities']:
+            result += "🔨 CRAFTING STATIONS:\n"
+            for opportunity in set(analysis['crafting_opportunities'][:3]):  # Show unique top 3
+                result += f"  • {opportunity.title()}\n"
             result += "\n"
         
-        # Strategic recommendation
-        if analysis['phase'] == 'player_turn' and analysis['available_actions']:
-            result += "💡 STRATEGIC RECOMMENDATION: It's your turn - consider taking an action!"
-        elif analysis['threats']:
-            result += "⚠️ STRATEGIC RECOMMENDATION: Threats detected - consider defensive actions."
-        elif analysis['opportunities']:
-            result += "✨ STRATEGIC RECOMMENDATION: Opportunities available - consider capitalizing!"
+        # Strategic recommendations based on Crafter gameplay
+        if analysis['survival_status'] == 'critical':
+            result += "⚠️ PRIORITY: Find food/water or sleep to restore health!"
+        elif analysis['achievement_progress'] < 20:
+            result += "🎯 FOCUS: Collect basic resources (wood, stone) and craft tools."
+        elif len(analysis['available_resources']) > 3:
+            result += "✨ OPPORTUNITY: Rich resource area - consider extended collection."
+        elif analysis['inventory_items'] > 8:
+            result += "🏗️ STRATEGY: Inventory getting full - consider crafting or placing items."
         else:
-            result += "🤔 STRATEGIC RECOMMENDATION: Analyze available options and make a strategic choice."
+            result += "🎮 CONTINUE: Maintain balanced exploration and resource collection."
         
         return result
     
@@ -939,24 +1306,65 @@ class Brain:
             print(f"MCP Iteration {iteration + 1}/{max_iterations}")
             
             # Update prompt with current iteration context
-            current_prompt = self._build_mcp_prompt(task, conversation_context, iteration, max_iterations)
+            current_prompt = self._build_mcp_prompt(task, conversation_context, iteration, max_iterations, pre_knowledge)
             
-            # Call LLM with MCP tools
-            imgs_64 = [cv_to_base64(state['screen'])]
-            response = self.base_model.call_text_images(
-                current_prompt, 
-                imgs_64, 
-                self.mcp_interaction_tools, 
-                pre_knowledge=pre_knowledge
-            )
+            # Debug: Print simplified MCP iteration info (detailed prompt removed to reduce noise)
+            print(f"🔄 MCP Iteration {iteration + 1}/{max_iterations}: Building prompt and calling LLM...")
+            
+            # Call LLM with MCP tools with timeout protection
+            # Only pass image on first iteration or when specifically needed for visual queries
+            # This improves efficiency by relying on structured JSON data from environment queries
+            if iteration == 0 or any('scene_summary' in str(ctx.get('query', {})) for ctx in conversation_context[-2:]):
+                imgs_64 = [cv_to_base64(state['screen'])]
+            else:
+                imgs_64 = []
+            
+            try:
+                response = self.base_model.call_text_images(
+                    current_prompt, 
+                    imgs_64, 
+                    self.mcp_interaction_tools, 
+                    pre_knowledge=pre_knowledge
+                )
+                
+            except Exception as api_error:
+                print(f"❌ MCP API call failed: {api_error}")
+                print(f"⚠️ Falling back to random exploration due to API error")
+                
+                # Fallback to random exploration when API fails
+                clickable_objects = [obj for obj in detected_objects if obj.get('interactivity') == 'clickable']
+                if not clickable_objects:
+                    clickable_objects = detected_objects
+                
+                if clickable_objects:
+                    import random
+                    selected_obj = random.choice(clickable_objects)
+                    operations = ['Click', 'RightSingle', 'LeftDouble']
+                    selected_operation = random.choice(operations)
+                    
+                    print(f"🎲 API Fallback: {selected_operation} on object {selected_obj.get('id', 'unknown')} at {selected_obj['center']}")
+                    
+                    return {
+                        "action_type": "direct_operation",
+                        "operate": selected_operation,
+                        "params": {'x': selected_obj['center'][0], 'y': selected_obj['center'][1]},
+                        "object_id": selected_obj.get('id'),
+                        "conversation_context": conversation_context,
+                        "fallback_reason": "api_error"
+                    }
+                else:
+                    print("❌ No objects available for fallback")
+                    return None
             
             print(f"MCP Response: {response}")
             
-            self.logger.log({
-                f"eval/tokens/mcp_iteration_{iteration+1}/input": response['usage']['input'],
-                f"eval/tokens/mcp_iteration_{iteration+1}/output": response['usage']['output'],
-                f"eval/tokens/mcp_iteration_{iteration+1}/total": response['usage']['total']
-            }, step)
+            # Log token usage if available
+            if response and 'usage' in response:
+                self.logger.log({
+                    f"eval/tokens/mcp_iteration_{iteration+1}/input": response['usage']['input'],
+                    f"eval/tokens/mcp_iteration_{iteration+1}/output": response['usage']['output'],
+                    f"eval/tokens/mcp_iteration_{iteration+1}/total": response['usage']['total']
+                }, step)
             
             if response['function'] is None:
                 print("No function call in MCP response")
@@ -1001,9 +1409,43 @@ class Brain:
                     "conversation_context": conversation_context
                 }
                 
-            elif function_name in ['Click', 'RightSingle', 'LeftDouble', 'Type', 'Drag', 'Finished']:
-                # Execute direct operation
+            elif function_name in ['Click', 'RightSingle', 'LeftDouble', 'Type', 'Drag', 'Finished'] or \
+                 function_name in ['move_up', 'move_down', 'move_left', 'move_right', 'interact', 'sleep', 
+                                   'place_table', 'place_stone', 'place_furnace', 'plant_sapling',
+                                   'craft_wood_pickaxe', 'craft_stone_pickaxe', 'craft_iron_pickaxe',
+                                   'craft_wood_sword', 'craft_stone_sword', 'craft_iron_sword']:
+                # Execute direct operation (including Crafter keyboard actions)
                 print(f"MCP selected operation: {function_name}")
+                
+                # CRITICAL: Validate tool requirements for interact action in Crafter
+                if function_name == 'interact' and state and 'inventory' in state:
+                    inventory = state['inventory']
+                    
+                    # Check if trying to interact with resources that require tools
+                    nearby_objects = [obj for obj in detected_objects if obj.get('class', '').lower() in ['stone', 'coal', 'iron', 'diamond']]
+                    
+                    if nearby_objects:
+                        resource_type = nearby_objects[0].get('class', '').lower()
+                        required_tool = None
+                        
+                        if resource_type in ['stone', 'coal']:
+                            required_tool = 'wood_pickaxe'
+                        elif resource_type == 'iron':
+                            required_tool = 'stone_pickaxe'
+                        elif resource_type == 'diamond':
+                            required_tool = 'iron_pickaxe'
+                        
+                        if required_tool and inventory.get(required_tool, 0) == 0:
+                            print(f"❌ TOOL CHECK FAILED: Cannot collect {resource_type} without {required_tool}")
+                            print(f"📦 Current inventory: {inventory}")
+                            
+                            # Add warning to conversation context and continue to next iteration
+                            conversation_context.append({
+                                'iteration': iteration + 1,
+                                'query': {'query_type': 'tool_validation', 'action': function_name, 'target': resource_type},
+                                'result': f"VALIDATION FAILED: Cannot collect {resource_type} without {required_tool}. Current inventory: {inventory}. You must craft the required tool first or find a different target."
+                            })
+                            continue
                 
                 # Try to find the corresponding object_id based on coordinates
                 selected_object_id = None
@@ -1049,7 +1491,7 @@ class Brain:
                 print(f"Unknown function: {function_name}")
                 return None
         
-        print(f"MCP max iterations ({max_iterations}) reached without final decision. Falling back to random exploration.")
+        print(f"MCP max iterations ({max_iterations}) reached without final decision. Falling back to intelligent decision.")
         
         # Get clickable objects for random selection
         clickable_objects = [obj for obj in detected_objects if obj.get('interactivity') == 'clickable']
@@ -1111,8 +1553,8 @@ class Brain:
                 "fallback_reason": "no_objects_detected"
             }
     
-    def _build_mcp_prompt(self, task, conversation_context, iteration_count, max_iterations):
-        """Build enhanced MCP interaction prompt with intelligent context analysis"""
+    def _build_mcp_prompt(self, task, conversation_context, iteration_count, max_iterations, pre_knowledge=None):
+        """Build enhanced MCP interaction prompt with intelligent context analysis and game-specific knowledge"""
         remaining_iterations = max_iterations - iteration_count
         
         # Analyze conversation context for intelligent decision making
@@ -1129,17 +1571,10 @@ class Brain:
 1. query_environment - Get real-time UI information (use strategically, avoid repetition)
 2. select_skill - Choose from learned skills when applicable
 3. Direct actions:
-   - Click: Select/activate UI elements, buttons, or single-target actions
-   - Drag: Move cards to targets (enemies/self), drag items between locations
-   - RightSingle, LeftDouble: Alternative click interactions
-   - Type: Input text when needed
-   - Finished: Complete the task
+{self._get_game_specific_direct_actions()}
 
 💡 OPERATION GUIDANCE:
-- For CARD GAMES: Use Drag to play cards on specific targets (enemies, self)
-- For UI ELEMENTS: Use Click for buttons, menus, selections
-- PREFER Drag over Click when moving objects to specific destinations
-- Drag is more efficient than Click+Click sequences for card targeting
+{self._get_game_specific_operation_guidance()}
 
 🧠 DECISION STRATEGY:
 {context_analysis['decision_guidance']}
@@ -1150,8 +1585,16 @@ class Brain:
 - Use specific queries (clickable_objects, text_content) over general ones
 - With {remaining_iterations} iterations left, prioritize ACTION over exploration
 - Don't hesitate to take direct action when you have sufficient information
-
-Analyze the current situation and choose the most appropriate action to complete the task."""
+- MANDATORY: You MUST select a concrete action (skill or direct operation) within {max_iterations} iterations
+- If uncertain after {max_iterations-1} iterations, choose the most reasonable action based on available information
+- ⚠️ CRITICAL FOR CRAFTER: When you see trees, stones, or resources nearby, use 'interact' action immediately
+- ⚠️ STOP QUERYING if you've already seen the environment - take action instead!"""
+        
+        # Add game-specific knowledge if available
+        if pre_knowledge:
+            base_prompt += f"\n\n🎮 GAME KNOWLEDGE:\n{pre_knowledge}"
+        
+        base_prompt += "\n\nAnalyze the current situation and choose the most appropriate action to complete the task."
         
         # Add condensed context history if available
         if conversation_context:
@@ -1159,6 +1602,66 @@ Analyze the current situation and choose the most appropriate action to complete
             base_prompt += context_analysis['context_summary']
         
         return base_prompt
+    
+    def _get_game_specific_operation_guidance(self):
+        """Get operation guidance specific to the current game"""
+        if self.game_name.lower() in ['slay the spire', 'sts']:
+            return """- For CARD GAMES: Use Drag to play cards on specific targets (enemies, self)
+- For UI ELEMENTS: Use Click for buttons, menus, selections
+- PREFER Drag over Click when moving objects to specific destinations
+- Drag is more efficient than Click+Click sequences for card targeting"""
+        elif self.game_name.lower() in ['crafter']:
+            return """- For KEYBOARD GAMES: Use keyboard actions for movement and interaction
+- WASD: Movement controls with coordinate system understanding:
+  * W (up): Decreases row coordinate (row-1) - moves toward smaller row numbers
+  * A (left): Decreases column coordinate (col-1) - moves toward smaller column numbers
+  * S (down): Increases row coordinate (row+1) - moves toward larger row numbers
+  * D (right): Increases column coordinate (col+1) - moves toward larger column numbers
+- Player facing direction follows same coordinate logic
+- SPACE/INTERACT: Primary interaction (collect, attack, eat)
+  * Use 'interact' action when facing trees, stones, creatures, or any collectible resources
+  * CRITICAL: When you see trees, stones, or other materials and you're adjacent to them, use 'interact' to collect
+  * This is the ONLY way to gather resources in Crafter - you must use interact/SPACE when facing materials
+  * RESOURCE COLLECTION REQUIREMENTS:
+    - Trees → wood (no tool required)
+    - Stone/Coal → requires wood pickaxe (craft first: 1 wood + table)
+    - Iron → requires stone pickaxe (craft first: 1 wood + 1 stone + table)
+    - Diamond → requires iron pickaxe (craft first: 1 wood + 1 coal + 1 iron + table + furnace)
+  * NEVER attempt to collect stone/coal without wood pickaxe in inventory
+  * NEVER attempt to collect iron without stone pickaxe in inventory
+  * NEVER attempt to collect diamond without iron pickaxe in inventory
+- TAB: Sleep to restore energy
+- Number keys 1-6: Craft tools and weapons
+- Letter keys T,R,F,P: Place structures (table, stone, furnace, plant)
+- CRITICAL GAME MECHANICS:
+  * Player character is ALWAYS at the center of the screen
+  * Objects/targets move toward the player through player movement, not the other way around
+  * When you want to reach an object, move in the direction that brings the object closer to the center
+  * Short-term goals should be achieved by making targets approach the player's central position
+  * UP=row-1, DOWN=row+1, LEFT=col-1, RIGHT=col+1
+  * RESOURCE COLLECTION: Always use 'interact' when adjacent to trees, stones, or other collectibles"""
+        else:
+            return """- For UI ELEMENTS: Use Click for buttons, menus, selections
+- Use Drag when moving objects to specific destinations
+- Use Type for text input when needed
+- Choose the most appropriate action based on the game interface"""
+    
+    def _get_game_specific_direct_actions(self):
+        """Get direct actions available for the current game"""
+        if self.game_name.lower() in ['slay the spire', 'sts']:
+            return """   - Click: Select/activate UI elements, buttons, or single-target actions
+   - Drag: Move cards to targets (enemies/self), drag items between locations
+   - RightSingle, LeftDouble: Alternative click interactions
+   - Type: Input text when needed"""
+        elif self.game_name.lower() in ['crafter']:
+            return """   - KeyboardAction: Use WASD for movement, SPACE for interaction, TAB for sleep
+   - CraftAction: Use number keys 1-6 for crafting tools and weapons
+   - PlaceAction: Use T,R,F,P for placing structures (table, stone, furnace, plant)"""
+        else:
+            return """   - Click: Select/activate UI elements, buttons, or single-target actions
+   - Drag: Move objects to specific destinations
+   - Type: Input text when needed
+   - RightSingle, LeftDouble: Alternative interactions"""
     
     def _save_conversation_to_history(self, conversation_context, task, final_decision):
         """Save valuable conversation context to persistent history"""
@@ -1178,7 +1681,12 @@ Analyze the current situation and choose the most appropriate action to complete
         # Extract key findings from conversation
         for ctx in conversation_context:
             query_type = ctx['query'].get('query_type', 'unknown')
-            result_preview = ctx['result'][:200] if len(ctx['result']) > 200 else ctx['result']
+            result = ctx['result']
+            if isinstance(result, dict):
+                result_str = str(result)
+                result_preview = result_str[:200] if len(result_str) > 200 else result_str
+            else:
+                result_preview = result[:200] if len(result) > 200 else result
             
             session_summary['key_findings'].append({
                 'query_type': query_type,
@@ -1256,7 +1764,7 @@ Analyze the current situation and choose the most appropriate action to complete
             if ctx['key_findings']:
                 top_findings = ctx['key_findings'][:2]  # Show top 2 findings
                 for finding in top_findings:
-                    summary += f"   - Found: {finding['result_preview'][:100]}...\n"
+                    summary += f"   - Found: {finding['result_preview'][:300]}...\n"
         
         summary += "\n💡 Use this context to avoid redundant exploration and make informed decisions.\n"
         return summary
@@ -1320,12 +1828,19 @@ Analyze the current situation and choose the most appropriate action to complete
         # Filter out historical context for pattern analysis (focus on current session queries)
         current_session_context = conversation_context[1:] if has_historical_context else conversation_context
         
-        # If only historical context exists, provide enhanced guidance
+        # If only historical context exists, provide enhanced guidance with increased character limit
         if has_historical_context and not current_session_context:
+            # Handle both string and dict results
+            result = conversation_context[0]['result']
+            if isinstance(result, dict):
+                context_text = str(result)[:600] + '...' if len(str(result)) > 600 else str(result)  # Increased from 300 to 600 chars
+            else:
+                context_text = result[:600] + '...' if len(result) > 600 else result  # Increased from 300 to 600 chars
+            
             return {
                 'status_summary': '- Initialized with historical insights from previous sessions',
                 'decision_guidance': 'You have valuable historical context. Use these insights to make informed decisions and avoid repeating unsuccessful approaches. Start with targeted queries based on historical patterns.',
-                'context_summary': conversation_context[0]['result'][:300] + '...' if len(conversation_context[0]['result']) > 300 else conversation_context[0]['result']
+                'context_summary': context_text
             }
         
         # Analyze query patterns (use current session context for pattern analysis)
@@ -1369,22 +1884,80 @@ Analyze the current situation and choose the most appropriate action to complete
         # Generate condensed context summary
         context_summary = ""
         
-        # Include historical context summary if available
+        # Include historical context summary if available with increased character limit
         if has_historical_context:
-            historical_summary = conversation_context[0]['result'][:200]
+            result = conversation_context[0]['result']
+            if isinstance(result, dict):
+                historical_summary = str(result)[:500]  # Increased from 200 to 500 chars
+            else:
+                historical_summary = result[:500]  # Increased from 200 to 500 chars
             context_summary += f"📚 Historical Context: {historical_summary}...\n\n"
         
-        # Add current session context
+        # Add current session context with increased character limits
         unique_results = set()
         context_to_summarize = analysis_context[-4:] if analysis_context else []  # Last 4 current session interactions
         for ctx in context_to_summarize:
-            result_key = ctx['result'][:100]  # First 100 chars as key
+            result = ctx['result']
+            if isinstance(result, dict):
+                result_str = str(result)
+                result_key = result_str[:300]  # Increased from 200 to 300 chars as key
+                result_display = result_str[:800] + '...' if len(result_str) > 800 else result_str  # Increased from 400 to 800 chars
+            else:
+                result_key = result[:300]  # Increased from 200 to 300 chars as key
+                result_display = result[:3000] + '...' if len(result) > 800 else result  # Increased from 400 to 800 chars
+            
             if result_key not in unique_results:
                 unique_results.add(result_key)
-                context_summary += f"• {ctx['query']} → {ctx['result'][:150]}...\n"
+                context_summary += f"• {ctx['query']} → {result_display}\n"
         
         return {
             'status_summary': status_summary,
             'decision_guidance': decision_guidance.strip(),
             'context_summary': context_summary
         }
+    
+    def _extract_fallback_action(self, response, state):
+        """Extract a reasonable fallback action when MCP doesn't provide a clear decision"""
+        try:
+            # Try to extract any action mentioned in the response text
+            response_text = response.get('message', '').lower()
+            
+            # Look for common action keywords
+            if 'click' in response_text or 'select' in response_text:
+                return {
+                    "action_type": "direct_operation",
+                    "operate": "Click",
+                    "params": {"coordinate": [400, 300]},  # Center of screen
+                    "fallback_reason": "Extracted click action from response"
+                }
+            elif 'move' in response_text:
+                # Default to move_right for Crafter
+                return {
+                    "action_type": "direct_operation", 
+                    "operate": "move_right",
+                    "params": {},
+                    "fallback_reason": "Extracted movement action from response"
+                }
+            elif 'interact' in response_text:
+                return {
+                    "action_type": "direct_operation",
+                    "operate": "interact", 
+                    "params": {},
+                    "fallback_reason": "Extracted interact action from response"
+                }
+            else:
+                # Default safe action - just observe/sleep
+                return {
+                    "action_type": "direct_operation",
+                    "operate": "sleep",
+                    "params": {},
+                    "fallback_reason": "No clear action found, defaulting to safe action"
+                }
+        except Exception as e:
+            print(f"Error in fallback action extraction: {e}")
+            return {
+                "action_type": "direct_operation",
+                "operate": "sleep",
+                "params": {},
+                "fallback_reason": "Error in extraction, using safe default"
+            }

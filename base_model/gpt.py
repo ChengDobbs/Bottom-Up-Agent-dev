@@ -3,9 +3,10 @@ import json
 import time
 
 class GPT():
-    def __init__(self, model_name="gpt-4o", api_key=None):
-        self.client = OpenAI(api_key=api_key)
+    def __init__(self, model_name="gpt-4o", api_key=None, timeout=60):
+        self.client = OpenAI(api_key=api_key, timeout=timeout)
         self.model_name = model_name
+        self.timeout = timeout
 
     def call_text(self, text_prompt, tools=None, max_iterations=5):
         messages = [

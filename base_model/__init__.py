@@ -9,7 +9,7 @@ def creat_base_model(model_name, timeout=60):
     load_dotenv()
     if model_name == "gpt-4o" or model_name == "gpt-4o-vision" or model_name == "o4-mini":
         return GPT(model_name=model_name, api_key=os.getenv("OPENAI_API_KEY"))
-    if model_name == "claude-3-7-sonnet-20250219":
+    if "claude" in model_name:
         return Claude(model_name=model_name, api_key=os.getenv("ANTHROPIC_API_KEY"), timeout=timeout)
     if model_name == "UI_TARS":
         from .UI_TARS import UI_TARS

@@ -141,7 +141,7 @@ class GymEnvironmentAdapter:
             self.detector = Detector(config)
             
             # Set crafter environment reference for crafter_api detector
-            if self.detector.detector_type == 'crafter_api':
+            if self.detector and self.detector.detector_type == 'crafter_api':
                 # Check different ways to access crafter environment
                 crafter_env = None
                 if hasattr(self.env, '_world'):  # Direct crafter.Env
@@ -159,9 +159,16 @@ class GymEnvironmentAdapter:
                     print(f"   Environment type: {type(self.env)}")
                     print(f"   Available attributes: {[attr for attr in dir(self.env) if not attr.startswith('_')][:10]}...")
         
-        # Initialize Eye module for grid extraction (replaces CrafterGridExtractor)
+        # Note: Eye module is already initialized in Detector for crafter_api type
+        # No need to create additional grid_extractor instance
         self.grid_extractor = None
-        if self.env_name == 'Crafter' or 'crafter' in self.env_name.lower():
+        if (self.detector is not None and 
+            self.detector.detector_type == 'crafter_api' and 
+            hasattr(self.detector, 'eye')):
+            # Use the Eye instance from Detector to avoid duplication
+            self.grid_extractor = self.detector.eye
+            print(f"✅ Using Eye module from Detector for grid extraction in {self.env_name}")
+        elif self.env_name == 'Crafter' or 'crafter' in self.env_name.lower():
             try:
                 self.grid_extractor = Eye(config)
                 print(f"✅ Eye module initialized for grid extraction in {self.env_name}")
@@ -176,11 +183,9 @@ class GymEnvironmentAdapter:
         # Get env_type from the main config first, then from gym_config
         env_type = config.get('env_type', gym_config.get('env_type', 'gymnasium'))
         
-        print(f"🔍 Debug: config = {config}")
-        print(f"🔍 Debug: env_type = {env_type}")
-        print(f"🔍 Debug: self.env_name = {self.env_name}")
+        # Environment configuration loaded
         
-        if env_type == 'crafter_direct':
+        if env_type == 'crafter_pypi':
             # Import crafter first to trigger environment registration
             try:
                 import crafter
@@ -720,7 +725,77 @@ class GymEnvironmentAdapter:
         """Map Bottom-Up Agent operation to Gym action"""
         operate = operation.get('operate', 'noop')
         
-        # Handle different operation types
+        # Handle Crafter-specific operations first
+        if self.is_crafter:
+            crafter_operation_mapping = {
+                'move_up': 3,
+                'move_down': 4,
+                'move_left': 1,
+                'move_right': 2,
+                'interact': 5,
+                'sleep': 6,
+                'place_stone': 7,
+                'place_table': 8,
+                'place_furnace': 9,
+                'place_plant': 10,
+                'plant_sapling': 10,  # Alias for place_plant
+                'craft_wood_pickaxe': 11,
+                'craft_stone_pickaxe': 12,
+                'craft_iron_pickaxe': 13,
+                'craft_wood_sword': 14,
+                'craft_stone_sword': 15,
+                'craft_iron_sword': 16
+            }
+            
+            # Try direct mapping for Crafter operations
+            if operate in crafter_operation_mapping:
+                action = crafter_operation_mapping[operate]
+                print(f"🎯 Crafter operation '{operate}' mapped to action {action}")
+                return action
+            
+            # Handle variations and partial matches for Crafter
+            operate_lower = operate.lower()
+            if 'move' in operate_lower:
+                if 'up' in operate_lower:
+                    return 3
+                elif 'down' in operate_lower:
+                    return 4
+                elif 'left' in operate_lower:
+                    return 1
+                elif 'right' in operate_lower:
+                    return 2
+            
+            if any(word in operate_lower for word in ['interact', 'collect', 'attack', 'do']):
+                return 5  # Do action
+            
+            if 'sleep' in operate_lower:
+                return 6
+            
+            if 'place' in operate_lower:
+                if 'stone' in operate_lower:
+                    return 7
+                elif 'table' in operate_lower:
+                    return 8
+                elif 'furnace' in operate_lower:
+                    return 9
+                elif 'plant' in operate_lower or 'sapling' in operate_lower:
+                    return 10
+            
+            if 'craft' in operate_lower or 'make' in operate_lower:
+                if 'wood' in operate_lower and 'pickaxe' in operate_lower:
+                    return 11
+                elif 'stone' in operate_lower and 'pickaxe' in operate_lower:
+                    return 12
+                elif 'iron' in operate_lower and 'pickaxe' in operate_lower:
+                    return 13
+                elif 'wood' in operate_lower and 'sword' in operate_lower:
+                    return 14
+                elif 'stone' in operate_lower and 'sword' in operate_lower:
+                    return 15
+                elif 'iron' in operate_lower and 'sword' in operate_lower:
+                    return 16
+        
+        # Handle different operation types (generic)
         if operate in ['Click', 'LeftSingle']:
             params = operation.get('params', {})
             if 'coordinate' in params:
@@ -748,6 +823,7 @@ class GymEnvironmentAdapter:
             return self.action_mapping.get(action_name, 0)
         
         # Default action
+        print(f"⚠️ Unknown operation '{operate}', using default action 0")
         return 0
     
     def detect_objects(self, screen: np.ndarray) -> List[Dict[str, Any]]:
@@ -761,17 +837,15 @@ class GymEnvironmentAdapter:
                 objects.extend(detected_objects)
                 print(f"✅ Detected {len(detected_objects)} objects using {self.detector.detector_type} detector")
                 
-                # Add grid slice objects for crafter_api detector
+                # For crafter_api detector, grid objects are already included in detected_objects
+                # No need to add them separately to avoid duplication
                 if self.detector.detector_type == 'crafter_api' and self.grid_extractor:
-                    try:
-                        grid_objects = self.grid_extractor.extract_grid_cells(screen)
-                        if grid_objects:
-                            objects.extend(grid_objects)
-                            print(f"🔲 Added {len(grid_objects)} grid slice objects")
-                        else:
-                            print(f"⚠️ No grid objects extracted from screen")
-                    except Exception as grid_e:
-                        print(f"❌ Error extracting grid objects: {grid_e}")
+                    print(f"🔲 Grid objects already included in crafter_api detection (total: {len(detected_objects)})")
+                    # Debug: Check if we have the expected 7x9=63 objects
+                    if len(detected_objects) == 63:
+                        print(f"✅ Correct grid size: 7x9 = 63 objects detected")
+                    else:
+                        print(f"⚠️ Unexpected object count: {len(detected_objects)} (expected 63 for 7x9 grid)")
                 
                 return objects
             except Exception as e:

@@ -37,7 +37,7 @@ def create_environment(config):
     gym_config = config.get('gym', config.get('gym_env', {}))
     env_type = gym_config.get('env_type', 'gymnasium')
     
-    if env_type == 'crafter_direct':
+    if env_type == 'crafter_pypi':
         # Create Crafter environment directly
         render_mode = gym_config.get('render_mode', 'rgb_array')
         env = crafter.Env()

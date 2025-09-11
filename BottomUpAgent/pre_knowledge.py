@@ -142,7 +142,21 @@ You are playing Crafter, a 2D survival crafting game. Your goal is to earn all 2
 
 **KEYBOARD CONTROLS & ACTIONS:**
 • WASD: Movement (actions 1-4)
+  - W (up): Decreases row coordinate (row-1)
+  - A (left): Decreases column coordinate (col-1) 
+  - S (down): Increases row coordinate (row+1)
+  - D (right): Increases column coordinate (col+1)
 • SPACE: Primary interaction - collect/attack/eat (action 5)
+  ⚠️ CRITICAL: Use SPACE/interact when facing trees, stones, creatures, or any resources
+  ⚠️ This is the ONLY way to collect materials - you MUST use interact when adjacent to collectibles
+  ⚠️ RESOURCE COLLECTION REQUIREMENTS:
+    - Trees → wood (no tool required)
+    - Stone/Coal → requires wood pickaxe (craft first: 1 wood + table)
+    - Iron → requires stone pickaxe (craft first: 1 wood + 1 stone + table)
+    - Diamond → requires iron pickaxe (craft first: 1 wood + 1 coal + 1 iron + table + furnace)
+  ⚠️ NEVER attempt to collect stone/coal without wood pickaxe in inventory
+  ⚠️ NEVER attempt to collect iron without stone pickaxe in inventory
+  ⚠️ NEVER attempt to collect diamond without iron pickaxe in inventory
 • TAB: Sleep to restore energy (action 6)
 • T: Place crafting table (action 8)
 • R: Place stone block (action 7)
@@ -152,12 +166,31 @@ You are playing Crafter, a 2D survival crafting game. Your goal is to earn all 2
   - 1: Wood pickaxe  - 2: Stone pickaxe  - 3: Iron pickaxe
   - 4: Wood sword    - 5: Stone sword    - 6: Iron sword
 
+**COORDINATE SYSTEM & MOVEMENT:**
+- Grid coordinates: (row, col) where (0,0) is top-left
+- UP movement (W): row decreases (row-1) - moves toward smaller row numbers
+- DOWN movement (S): row increases (row+1) - moves toward larger row numbers  
+- LEFT movement (A): col decreases (col-1) - moves toward smaller column numbers
+- RIGHT movement (D): col increases (col+1) - moves toward larger column numbers
+- Player facing direction follows same logic: facing up means looking toward row-1
+- Example: Player at (3,4) moving UP goes to (2,4)
+- Example: Player at (3,4) moving RIGHT goes to (3,5)
+- Example: Player at (3,4) facing LEFT is looking toward (3,3)
+
+**CRITICAL GAME MECHANICS:**
+- Player character is ALWAYS positioned at the CENTER of the screen
+- Objects and targets move toward the player through player movement, NOT the reverse
+- To reach an object: move in the direction that brings the object closer to screen center
+- Navigation strategy: make targets approach your central position through strategic movement
+- Think of movement as "pulling" the world toward you, not moving yourself through the world
+
 **RESOURCE COLLECTION (use SPACE key):**
 - Tree → wood (no tool) | Stone/Coal → wood pickaxe | Iron → stone pickaxe | Diamond → iron pickaxe
 - Water → drink (no tool) | Grass → sapling (10% chance)
 
 **CRAFTING (near required infrastructure):**
-- Wood tools: 1 wood + table | Stone tools: 1 wood + 1 stone + table
+- Wood tools: 1 wood + table
+- Stone tools: 1 wood + 1 stone + table
 - Iron tools: 1 wood + 1 coal + 1 iron + table + furnace
 
 **PLACEMENT:**

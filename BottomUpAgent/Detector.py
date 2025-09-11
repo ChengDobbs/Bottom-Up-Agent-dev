@@ -114,7 +114,18 @@ class Detector:
         
         self.area_threshold = 0.03
 
-        self.clip = CLIP(model_name=config['detector']['clip_model'], use_gpu=True)
+        # Initialize CLIP only if needed (not for crafter_api with direct_api enabled)
+        self.clip = None
+        if self.detector_type == 'crafter_api':
+            # For crafter_api, only initialize CLIP if similarity matching is enabled and direct API is disabled
+            if self.similarity_enabled and (not self.direct_api_enabled or self.fallback_to_similarity):
+                print("🔧 Initializing CLIP for similarity matching fallback...")
+                self.clip = CLIP(model_name=config['detector']['clip_model'], use_gpu=True)
+            else:
+                print("✅ Skipping CLIP initialization - using direct API only")
+        else:
+            # For other detector types, always initialize CLIP
+            self.clip = CLIP(model_name=config['detector']['clip_model'], use_gpu=True)
     
     def start_parallel_crafter_launcher(self, max_steps: int = None) -> bool:
         """
@@ -333,6 +344,7 @@ class Detector:
     def _extract_objects_direct_api(self, image):
         """Extract objects using direct Crafter API access."""
         objects = []
+        # If direct API is not available, fall back to similarity matching
         if not self.direct_api_enabled or self.crafter_env is None:
             if self.fallback_to_similarity:
                 return self._extract_objects_similarity_matching(image)
