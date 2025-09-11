@@ -16,6 +16,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from BottomUpAgent.BottomUpAgent import BottomUpAgent
+from BottomUpAgent.SceneAnalyzer import SceneAnalyzer
 from BottomUpAgent.GymAdapter import GymEnvironmentAdapter, GymAdapterFactory
 from BottomUpAgent.Eye import Eye
 from BottomUpAgent.Hand import Hand
@@ -170,6 +171,21 @@ class GymBottomUpAgent(BottomUpAgent):
         
         # Keep existing detector and brain
         # They should work with the adapted observations
+        
+        # Initialize Scene Analyzer for modular scene analysis
+        if hasattr(self, 'eye') and hasattr(self, 'detector') and hasattr(self, 'brain'):
+            self.scene_analyzer = SceneAnalyzer(
+                self.eye, self.detector, self.brain, self.gym_adapter
+            )
+            print("✅ Scene Analyzer initialized for modular scene analysis")
+            
+            # Validate components
+            validation = self.scene_analyzer.validate_components()
+            if not validation['all_valid']:
+                print(f"⚠️ Scene Analyzer validation warnings: {validation}")
+        else:
+            self.scene_analyzer = None
+            print("⚠️ Scene Analyzer not initialized - missing required components")
     
     def _setup_parallel_launcher(self):
         """Setup parallel launcher for GUI and detection"""
@@ -340,6 +356,12 @@ class GymBottomUpAgent(BottomUpAgent):
         # Get observation from gym environment
         ob = self.get_observation()
         
+        # Get inventory and game state using modularized Eye function
+        context = self.eye.get_game_context(self.gym_adapter, ob)
+        inventory = context['inventory']
+        game_state = context['game_state']
+        scene_summary = ""  # Will be generated after object detection
+        
         # Perform step-by-step detection
         print(f"\n--- Step {step} Detection ---")
         print(f"🔍 Analyzing game state and detecting objects...")
@@ -354,18 +376,28 @@ class GymBottomUpAgent(BottomUpAgent):
             screen = ob.get('screen')
             if screen is not None:
                 try:
-                    # Extract objects using crafter API detection
-                    detected_objects = self.detector.extract_objects_crafter_api(screen)
-                    print(f"✅ Detected {len(detected_objects)} objects in step {step}")
-                    
-                    # Log object types for debugging
-                    if len(detected_objects) > 0:
-                        object_types = {}
-                        for obj in detected_objects:
-                            obj_type = obj.get('type', 'unknown')
-                            object_types[obj_type] = object_types.get(obj_type, 0) + 1
-                        print(f"📊 Object distribution: {dict(sorted(object_types.items()))}")
+                    # Use Scene Analyzer for complete scene analysis if available
+                    if hasattr(self, 'scene_analyzer') and self.scene_analyzer:
+                        analysis = self.scene_analyzer.analyze_scene_complete(
+                            ob, step_info=f"STEP {step}", context_name="STEP"
+                        )
+                        detected_objects = analysis['detected_objects']
+                        scene_summary = analysis['scene_summary']
+                        # Update context variables with analysis results
+                        inventory = analysis['inventory']
+                        game_state = analysis['game_state']
                     else:
+                        # Fallback to individual Eye functions
+                        detected_objects = self.eye.get_detected_objects_with_logging(
+                            self.detector, screen, f"Step {step}"
+                        )
+                        scene_summary = self.eye.generate_and_display_scene_summary(
+                            self.brain, detected_objects, inventory, game_state, 
+                            step_info=f"STEP {step}", context_name="STEP"
+                        )
+                    
+                    # Check if we have valid detected objects
+                    if not detected_objects:
                         print("⚠️ No objects detected - this may cause the process to hang")
                         print("🔧 Checking detector configuration...")
                         
@@ -2477,18 +2509,32 @@ class GymBottomUpAgent(BottomUpAgent):
                                 time.sleep(0.5)
                                 continue
                                 
-                            # Get detected objects for MCP context
-                            detected_objects = []
-                            try:
-                                if hasattr(self, 'detector') and self.detector:
-                                    detected_objects = self.detector.get_detected_objects(obs['screen'])
-                            except Exception as e:
-                                print(f"⚠️ Object detection failed: {e}")
+                            # Use Scene Analyzer for complete scene analysis if available
+                            if hasattr(self, 'scene_analyzer') and self.scene_analyzer:
+                                analysis = self.scene_analyzer.analyze_scene_complete(
+                                    obs, step_info=f"STEP {shared_state['steps']}", context_name="MCP"
+                                )
+                                detected_objects = analysis['detected_objects']
+                                inventory = analysis['inventory']
+                                game_state = analysis['game_state']
+                                scene_summary = analysis['scene_summary']
+                            else:
+                                # Fallback to individual Eye functions
+                                detected_objects = self.eye.get_detected_objects_with_logging(
+                                    self.detector, obs['screen'], f"MCP Step {shared_state['steps']}"
+                                )
+                                context = self.eye.get_game_context(self.gym_adapter, obs)
+                                inventory = context['inventory']
+                                game_state = context['game_state']
+                                scene_summary = self.eye.generate_and_display_scene_summary(
+                                    self.brain, detected_objects, inventory, game_state, 
+                                    step_info=f"STEP {shared_state['steps']}", context_name="MCP"
+                                )
                             
                             # Prepare state for MCP call
                             state = {
                                 'screen': obs['screen'],
-                                'inventory': obs.get('inventory', {})
+                                'inventory': inventory
                             }
                             
                             # Define current task based on dynamic planning
@@ -2538,33 +2584,8 @@ class GymBottomUpAgent(BottomUpAgent):
                                 if not action_queue.full():
                                     action_queue.put(('mcp', fallback_action, "MCP Error Fallback"))
                             
-                            # Get inventory and game state for logging
-                            inventory = {}
-                            game_state = {}
-                            
-                            # Get inventory from Crafter environment
-                            try:
-                                if hasattr(self.gym_adapter, 'env') and hasattr(self.gym_adapter.env, '_player'):
-                                    player_inventory = self.gym_adapter.env._player.inventory
-                                    # Only include non-zero items
-                                    inventory = {item: count for item, count in player_inventory.items() if count > 0}
-                                elif hasattr(self.gym_adapter, 'env') and hasattr(self.gym_adapter.env, 'unwrapped'):
-                                    if hasattr(self.gym_adapter.env.unwrapped, '_player'):
-                                        player_inventory = self.gym_adapter.env.unwrapped._player.inventory
-                                        inventory = {item: count for item, count in player_inventory.items() if count > 0}
-                            except Exception as e:
-                                print(f"⚠️ Could not get inventory: {e}")
-                                inventory = obs.get('inventory', {})
-                            
-                            # Get game state info
-                            if hasattr(self.gym_adapter, 'get_info'):
-                                game_state = self.gym_adapter.get_info() or {}
-                            
-                            # Generate comprehensive scene summary for MCP (replaces verbose grid printing)
-                            scene_summary = self.brain._generate_scene_summary(detected_objects, inventory, game_state)
-                            
-                            print("\n=== Compact JSON Scene Summary for MCP Tools ===")
-                            print(f"\n{scene_summary}\n")
+                            # Note: inventory, game_state, and scene_summary are now generated at the beginning of run_step
+                            # This avoids duplication and ensures early availability for debugging
                             
                             # Generate and print JSON scene summary for MCP tools
                             # try:

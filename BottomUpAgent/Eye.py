@@ -26,6 +26,7 @@ class Eye:
         self.width = config['eye']['width']
         self.height = config['eye']['height']
         self.platform = platform.system().lower()
+        self.game_name = config['game_name']  # Store for game-specific logic
 
         # Initialize platform-specific components
         if self.platform == 'linux' and XLIB_AVAILABLE:
@@ -381,3 +382,138 @@ class Eye:
         except Exception as e:
             print(f"❌ Error in extract_grid_objects: {e}")
             return []
+
+    # ==================== Scene Analysis Module ====================
+    
+    def get_game_context(self, gym_adapter, observation=None):
+        """
+        Unified function to get inventory and game state for any game environment.
+        
+        Args:
+            gym_adapter: The gym environment adapter
+            observation: Optional observation dict (fallback source)
+            
+        Returns:
+            dict: Contains 'inventory' and 'game_state'
+        """
+        inventory = {}
+        game_state = {}
+        
+        try:
+            # Try to get inventory from Crafter environment (most detailed)
+            if hasattr(gym_adapter, 'env') and hasattr(gym_adapter.env, '_player'):
+                player_inventory = gym_adapter.env._player.inventory
+                # Only include non-zero items
+                inventory = {item: count for item, count in player_inventory.items() if count > 0}
+            elif hasattr(gym_adapter, 'env') and hasattr(gym_adapter.env, 'unwrapped'):
+                if hasattr(gym_adapter.env.unwrapped, '_player'):
+                    player_inventory = gym_adapter.env.unwrapped._player.inventory
+                    inventory = {item: count for item, count in player_inventory.items() if count > 0}
+            elif observation and 'inventory' in observation:
+                # Fallback to observation inventory
+                inventory = observation['inventory']
+        except Exception as e:
+            print(f"⚠️ Could not get inventory: {e}")
+            if observation and 'inventory' in observation:
+                inventory = observation['inventory']
+        
+        # Get game state info
+        try:
+            if hasattr(gym_adapter, 'get_info'):
+                game_state = gym_adapter.get_info() or {}
+            elif observation and 'game_state' in observation:
+                game_state = observation['game_state']
+        except Exception as e:
+            print(f"⚠️ Could not get game state: {e}")
+        
+        return {
+            'inventory': inventory,
+            'game_state': game_state
+        }
+    
+    def get_detected_objects_with_logging(self, detector, screen, context_name="Detection"):
+        """
+        Unified function to get detected objects with consistent logging.
+        
+        Args:
+            detector: The detector instance
+            screen: Screen/image data
+            context_name: Context name for logging (e.g., "Step", "MCP")
+            
+        Returns:
+            list: Detected objects
+        """
+        detected_objects = []
+        
+        try:
+            if hasattr(detector, 'get_detected_objects'):
+                detected_objects = detector.get_detected_objects(screen)
+            elif hasattr(detector, 'extract_objects_crafter_api'):
+                detected_objects = detector.extract_objects_crafter_api(screen)
+            
+            # Consistent logging
+            if detected_objects:
+                print(f"🔍 [{context_name}] Extracted {len(detected_objects)} objects from {self.game_name} environment")
+                
+                # Show detection method if available
+                if hasattr(detector, 'detection_method'):
+                    print(f"📊 [{context_name}] Total objects extracted: {len(detected_objects)} using {detector.detection_method} method")
+                else:
+                    print(f"📊 [{context_name}] Total objects extracted: {len(detected_objects)}")
+                
+                # Log object distribution
+                object_types = {}
+                for obj in detected_objects:
+                    obj_type = obj.get('type', 'unknown')
+                    object_types[obj_type] = object_types.get(obj_type, 0) + 1
+                
+                if len(object_types) <= 10:  # Only show if not too many types
+                    print(f"📋 [{context_name}] Object distribution: {dict(sorted(object_types.items()))}")
+            else:
+                print(f"⚠️ [{context_name}] No objects detected")
+                
+        except Exception as e:
+            print(f"❌ [{context_name}] Object detection failed: {e}")
+        
+        return detected_objects
+    
+    def generate_and_display_scene_summary(self, brain, detected_objects, inventory, game_state, 
+                                         step_info="", context_name="SCENE"):
+        """
+        Unified function to generate and display scene summary with consistent formatting.
+        
+        Args:
+            brain: Brain instance with _generate_scene_summary method
+            detected_objects: List of detected objects
+            inventory: Player inventory dict
+            game_state: Game state dict
+            step_info: Step number or identifier for display
+            context_name: Context name for the summary header
+            
+        Returns:
+            str: Generated scene summary
+        """
+        scene_summary = ""
+        
+        if len(detected_objects) > 0 and hasattr(brain, '_generate_scene_summary'):
+            try:
+                # Generate comprehensive scene summary
+                scene_summary = brain._generate_scene_summary(detected_objects, inventory, game_state)
+                
+                # Display with consistent formatting
+                header = f"=== 🎯 {context_name}"
+                if step_info:
+                    header += f" {step_info}"
+                header += " SCENE SUMMARY ==="
+                
+                print(f"\n{header}")
+                print(f"{scene_summary}")
+                print("=== END SCENE SUMMARY ===\n")
+                
+            except Exception as e:
+                print(f"❌ Error generating scene summary: {e}")
+                scene_summary = f"Error: {e}"
+        else:
+            print(f"⚠️ Cannot generate scene summary: {'No objects detected' if not detected_objects else 'Brain method unavailable'}")
+        
+        return scene_summary

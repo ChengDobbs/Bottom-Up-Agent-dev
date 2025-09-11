@@ -11,7 +11,6 @@ import os
 import pathlib
 from .Eye import Eye
 from sklearn.metrics.pairwise import cosine_similarity
-from skimage.metrics import structural_similarity as ssim
 
 class CLIP:
     def __init__(self, model_name: str = "ViT-B/32", use_gpu: bool = True):
@@ -505,13 +504,14 @@ class Detector:
         print(f"✅ Loaded {len(self.template_cache)} templates for similarity matching")
     
     def _calculate_similarity(self, img1, img2):
-        """Calculate similarity between two images using multiple metrics."""
-        # Convert to grayscale for SSIM
+        """Calculate similarity between two images using simple and effective metrics."""
+        # Convert to grayscale
         gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
         gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
         
-        # Structural similarity
-        ssim_score = ssim(gray1, gray2)
+        # Simple grayscale difference similarity (similar to Eye.py approach)
+        diff = cv2.absdiff(gray1, gray2)
+        diff_score = 1.0 - (np.sum(diff) / (diff.shape[0] * diff.shape[1] * 255))
         
         # Template matching
         result = cv2.matchTemplate(gray1, gray2, cv2.TM_CCOEFF_NORMED)
@@ -522,8 +522,8 @@ class Detector:
         hist2 = cv2.calcHist([img2], [0, 1, 2], None, [50, 50, 50], [0, 256, 0, 256, 0, 256])
         hist_score = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
         
-        # Weighted combination
-        combined_score = (ssim_score * 0.4 + template_score * 0.4 + hist_score * 0.2)
+        # Weighted combination (adjusted weights since we removed SSIM)
+        combined_score = (diff_score * 0.4 + template_score * 0.4 + hist_score * 0.2)
         return max(0.0, combined_score)
     
     def _analyze_cell_color(self, cell_image):

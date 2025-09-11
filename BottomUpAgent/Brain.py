@@ -1332,29 +1332,46 @@ class Brain:
                 print(f"⚠️ Falling back to random exploration due to API error")
                 
                 # Fallback to random exploration when API fails
-                clickable_objects = [obj for obj in detected_objects if obj.get('interactivity') == 'clickable']
-                if not clickable_objects:
-                    clickable_objects = detected_objects
-                
-                if clickable_objects:
+                # For Crafter, use keyboard actions instead of click operations
+                if self.game_name == "Crafter":
                     import random
-                    selected_obj = random.choice(clickable_objects)
-                    operations = ['Click', 'RightSingle', 'LeftDouble']
-                    selected_operation = random.choice(operations)
+                    # Crafter keyboard actions: movement and interaction
+                    crafter_operations = ['move_left', 'move_right', 'move_up', 'move_down', 'interact', 'sleep']
+                    selected_operation = random.choice(crafter_operations)
                     
-                    print(f"🎲 API Fallback: {selected_operation} on object {selected_obj.get('id', 'unknown')} at {selected_obj['center']}")
+                    print(f"🎲 API Fallback: {selected_operation} for Crafter")
                     
                     return {
                         "action_type": "direct_operation",
                         "operate": selected_operation,
-                        "params": {'x': selected_obj['center'][0], 'y': selected_obj['center'][1]},
-                        "object_id": selected_obj.get('id'),
-                        "conversation_context": conversation_context,
-                        "fallback_reason": "api_error"
+                        "params": {},
+                        "fallback_decision": True,
+                        "reason": "MCP API failed, using random Crafter keyboard action"
                     }
                 else:
-                    print("❌ No objects available for fallback")
-                    return None
+                    # For other games, use click operations
+                    clickable_objects = [obj for obj in detected_objects if obj.get('interactivity') == 'clickable']
+                    if not clickable_objects:
+                        clickable_objects = detected_objects
+                    
+                    if clickable_objects:
+                        import random
+                        selected_obj = random.choice(clickable_objects)
+                        operations = ['Click', 'RightSingle', 'LeftDouble']
+                        selected_operation = random.choice(operations)
+                        
+                        print(f"🎲 API Fallback: {selected_operation} on object {selected_obj.get('id', 'unknown')} at {selected_obj['center']}")
+                        
+                        return {
+                            "action_type": "direct_operation",
+                            "operate": selected_operation,
+                            "params": {"coordinate": selected_obj['center']},
+                            "fallback_decision": True,
+                            "selected_object": selected_obj
+                        }
+                    else:
+                        print("❌ No objects available for fallback")
+                        return None
             
             print(f"MCP Response: {response}")
             
@@ -1924,12 +1941,21 @@ class Brain:
             
             # Look for common action keywords
             if 'click' in response_text or 'select' in response_text:
-                return {
-                    "action_type": "direct_operation",
-                    "operate": "Click",
-                    "params": {"coordinate": [400, 300]},  # Center of screen
-                    "fallback_reason": "Extracted click action from response"
-                }
+                # For Crafter, convert click to interact
+                if self.game_name == "Crafter":
+                    return {
+                        "action_type": "direct_operation",
+                        "operate": "interact",
+                        "params": {},
+                        "fallback_reason": "Converted click to interact for Crafter"
+                    }
+                else:
+                    return {
+                        "action_type": "direct_operation",
+                        "operate": "Click",
+                        "params": {"coordinate": [400, 300]},  # Center of screen
+                        "fallback_reason": "Extracted click action from response"
+                    }
             elif 'move' in response_text:
                 # Default to move_right for Crafter
                 return {
