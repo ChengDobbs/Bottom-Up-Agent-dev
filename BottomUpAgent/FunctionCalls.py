@@ -135,8 +135,8 @@ def environment_query_tools(model_name):
                     "properties": {
                         "query_type": {
                             "type": "string",
-                            "enum": ["all_objects", "text_content", "specific_object", "object_summary", "game_state", "historical_context", "scene_summary"],
-                            "description": "Type of environment query to perform. 'scene_summary' provides concise player surroundings info. Note: 'clickable_objects' has been replaced with 'historical_context' for better efficiency"
+                            "enum": ["all_objects", "text_content", "specific_object", "object_summary", "game_state", "historical_context", "scene_summary", "available_actions"],
+                            "description": "Type of environment query to perform. 'scene_summary' provides concise player surroundings info. 'available_actions' returns prioritized actions player can execute now."
                         },
                         "object_id": {
                             "type": "string",
@@ -164,8 +164,8 @@ def environment_query_tools(model_name):
                         "properties": {
                             "query_type": {
                                 "type": "string",
-                                "enum": ["all_objects", "text_content", "specific_object", "object_summary", "game_state", "historical_context", "scene_summary"],
-                                "description": "Type of environment query to perform. 'scene_summary' provides concise player surroundings info. Note: 'clickable_objects' has been replaced with 'historical_context' for better efficiency"
+                                "enum": ["all_objects", "text_content", "specific_object", "object_summary", "game_state", "historical_context", "scene_summary", "available_actions"],
+                                "description": "Type of environment query to perform. 'scene_summary' provides concise player surroundings info. 'available_actions' returns prioritized actions player can execute now. Note: 'clickable_objects' has been replaced with 'historical_context' for better efficiency"
                             },
                             "object_id": {
                                 "type": "string",

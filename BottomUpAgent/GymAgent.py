@@ -431,22 +431,33 @@ class GymBottomUpAgent(BottomUpAgent):
             print(f"⚠️ Detector or environment not properly configured for step {step}")
             ob['detected_objects'] = []
         
-        # Get or create state using long-term memory (if available)
+        # Get or create state using long-term memory with Crafter-specific integration
         if hasattr(self, 'brain') and self.brain is not None and hasattr(self.brain, 'long_memory') and self.brain.long_memory is not None:
-            state = self.brain.long_memory.get_state(ob)
-            if state is None:
-                print("No state found, create state")
-                from BottomUpAgent.Mcts import MCTS
-                mcts = MCTS()
-                
-                state = {
-                    'id': None,
-                    'state_feature': ob['state_feature'],
-                    'object_ids': [],
-                    'mcts': mcts,
-                    'skill_clusters': [],
-                }
-                state['id'] = self.brain.long_memory.save_state(state)
+            # For Crafter, use specialized state creation
+            if self.game_name == "Crafter":
+                state = self._get_or_create_crafter_state(ob, step)
+                # Save state to database if it doesn't exist
+                if state['id'] is None:
+                    state['id'] = self.brain.long_memory.save_state(state)
+                    print(f"🎯 Created new Crafter state with progress score: {state['progress_score']:.2f}")
+                else:
+                    print(f"🔄 Retrieved existing Crafter state with progress score: {state['progress_score']:.2f}")
+            else:
+                # Use standard state creation for other games
+                state = self.brain.long_memory.get_state(ob)
+                if state is None:
+                    print("No state found, create state")
+                    from BottomUpAgent.Mcts import MCTS
+                    mcts = MCTS()
+                    
+                    state = {
+                        'id': None,
+                        'state_feature': ob['state_feature'],
+                        'object_ids': [],
+                        'mcts': mcts,
+                        'skill_clusters': [],
+                    }
+                    state['id'] = self.brain.long_memory.save_state(state)
             
             # Get skill clusters
             skill_clusters_ids = state['skill_clusters']
@@ -562,6 +573,42 @@ class GymBottomUpAgent(BottomUpAgent):
         
         # Skill evolution
         self.brain.skill_evolution(step, skills, skill_cluster)
+        
+        # Update MCTS and compare progress for Crafter
+        if self.game_name == "Crafter" and hasattr(self, 'brain') and self.brain is not None and hasattr(self.brain, 'long_memory'):
+            try:
+                # Get new state after action execution
+                new_ob = self.get_observation()
+                new_state = self._get_or_create_crafter_state(new_ob, step + 1)
+                
+                # Compare progress
+                progress_comparison = self._compare_crafter_progress(state, new_state)
+                
+                if progress_comparison['progress_difference'] > 0:
+                    print(f"🎯 Progress improved! Score: +{progress_comparison['progress_difference']:.2f}")
+                    if progress_comparison['new_achievements']:
+                        print(f"🏆 New achievements: {progress_comparison['new_achievements']}")
+                    
+                    # Update MCTS with improved value
+                    if new_state['mcts'] and new_state['mcts'].nodes:
+                        new_state['mcts'].nodes[0].value = new_state['progress_score']
+                        new_state['mcts'].nodes[0].n_visits += 1
+                    
+                    # Save updated state to database
+                    self.brain.long_memory.update_state(new_state)
+                    
+                elif progress_comparison['progress_difference'] < 0:
+                    print(f"⚠️ Progress decreased: {progress_comparison['progress_difference']:.2f}")
+                
+                # Log progress comparison
+                self.logger.log({
+                    "crafter/progress_score": new_state['progress_score'],
+                    "crafter/progress_difference": progress_comparison['progress_difference'],
+                    "crafter/new_achievements": len(progress_comparison['new_achievements'])
+                }, step)
+                
+            except Exception as e:
+                print(f"⚠️ Error in Crafter progress comparison: {e}")
         
         return result
     
@@ -3556,6 +3603,266 @@ Task:"""
         
         return None
     
+    def _create_crafter_state_feature(self, inventory: Dict, game_state: Dict, achievements: Dict, step: int) -> np.ndarray:
+        """
+        Create a state feature vector for Crafter game state comparison and MCTS.
+        
+        Args:
+            inventory: Player inventory dictionary
+            game_state: Game state information
+            achievements: Achievement progress dictionary
+            step: Current step number
+            
+        Returns:
+            numpy array representing the state feature
+        """
+        # Create a comprehensive state feature vector
+        feature_vector = []
+        
+        # Inventory features (normalized to 0-1)
+        inventory_items = ['wood', 'stone', 'coal', 'iron', 'diamond', 'wood_pickaxe', 
+                          'stone_pickaxe', 'iron_pickaxe', 'wood_sword', 'stone_sword', 
+                          'iron_sword', 'health', 'food', 'drink', 'energy', 'sapling']
+        
+        for item in inventory_items:
+            value = inventory.get(item, 0)
+            # Normalize based on max values (assuming max 9 for most items)
+            normalized_value = min(value / 9.0, 1.0)
+            feature_vector.append(normalized_value)
+        
+        # Achievement progress features (binary)
+        achievement_items = ['collect_wood', 'collect_drink', 'collect_sapling', 'place_table',
+                           'make_wood_pickaxe', 'make_wood_sword', 'eat_plant', 'collect_stone',
+                           'collect_coal', 'make_stone_pickaxe', 'make_stone_sword', 'place_stone',
+                           'place_furnace', 'collect_iron', 'make_iron_pickaxe', 'make_iron_sword',
+                           'collect_diamond', 'wake_up', 'eat_cow', 'defeat_zombie', 'defeat_skeleton',
+                           'place_plant']
+        
+        for achievement in achievement_items:
+            feature_vector.append(1.0 if achievements.get(achievement, 0) > 0 else 0.0)
+        
+        # Game state features
+        feature_vector.append(game_state.get('health', 0) / 9.0)
+        feature_vector.append(game_state.get('food', 0) / 9.0)
+        feature_vector.append(game_state.get('drink', 0) / 9.0)
+        feature_vector.append(game_state.get('energy', 0) / 9.0)
+        
+        # Position features (normalized)
+        position = game_state.get('position', (0, 0))
+        feature_vector.append(position[0] / 64.0)  # Assuming 64x64 world
+        feature_vector.append(position[1] / 64.0)
+        
+        # Step feature (normalized)
+        feature_vector.append(min(step / 1000.0, 1.0))
+        
+        return np.array(feature_vector, dtype=np.float32)
+    
+    def _create_crafter_mcts(self, inventory: Dict, game_state: Dict, achievements: Dict, step: int):
+        """
+        Create MCTS instance for Crafter game state.
+        
+        Args:
+            inventory: Player inventory dictionary
+            game_state: Game state information
+            achievements: Achievement progress dictionary
+            step: Current step number
+            
+        Returns:
+            MCTS instance
+        """
+        from BottomUpAgent.Mcts import MCTS, MCTS_NODE
+        
+        # Initialize MCTS
+        mcts = MCTS()
+        
+        # Set initial value based on progress
+        progress_score = self._calculate_crafter_progress(achievements, inventory, [])
+        mcts.nodes[0].value = progress_score
+        
+        return mcts
+    
+    def _calculate_crafter_progress(self, achievements: Dict, inventory: Dict, detected_objects: List) -> float:
+        """
+        Calculate progress score for Crafter game state.
+        
+        Args:
+            achievements: Achievement progress dictionary
+            inventory: Player inventory dictionary
+            detected_objects: List of detected objects
+            
+        Returns:
+            Progress score (0.0 to 10.0)
+        """
+        score = 0.0
+        
+        # Achievement progress (major milestones)
+        achievement_weights = {
+            'collect_wood': 0.5,
+            'collect_drink': 0.5,
+            'collect_sapling': 0.5,
+            'place_table': 1.0,
+            'make_wood_pickaxe': 1.0,
+            'collect_stone': 1.0,
+            'collect_coal': 1.0,
+            'make_stone_pickaxe': 1.5,
+            'place_furnace': 1.0,
+            'collect_iron': 1.5,
+            'make_iron_pickaxe': 2.0,
+            'collect_diamond': 2.0,
+            'eat_cow': 0.5,
+            'eat_plant': 0.5,
+            'defeat_zombie': 1.0,
+            'defeat_skeleton': 1.0,
+            'wake_up': 0.5,
+            'place_stone': 0.5,
+            'place_plant': 0.5,
+            'make_wood_sword': 0.5,
+            'make_stone_sword': 0.5,
+            'make_iron_sword': 1.0
+        }
+        
+        for achievement, weight in achievement_weights.items():
+            if achievements.get(achievement, 0) > 0:
+                score += weight
+        
+        # Tool progression bonus
+        if inventory.get('iron_pickaxe', 0) > 0:
+            score += 1.0
+        elif inventory.get('stone_pickaxe', 0) > 0:
+            score += 0.5
+        elif inventory.get('wood_pickaxe', 0) > 0:
+            score += 0.25
+        
+        # Infrastructure bonus
+        if inventory.get('table', 0) > 0 or any('table' in str(obj) for obj in detected_objects):
+            score += 0.5
+        if inventory.get('furnace', 0) > 0 or any('furnace' in str(obj) for obj in detected_objects):
+            score += 0.5
+        
+        return min(score, 10.0)  # Cap at 10.0
+    
+    def _get_or_create_crafter_state(self, ob: Dict[str, Any], step: int) -> Dict[str, Any]:
+        """
+        Get or create Crafter state with MCTS integration.
+        
+        Args:
+            ob: Observation dictionary
+            step: Current step number
+            
+        Returns:
+            Dict containing state information with MCTS
+        """
+        # Get current inventory and game state
+        inventory = {}
+        game_state = {}
+        achievements = {}
+        
+        try:
+            # Try to get inventory from Crafter environment
+            if hasattr(self.gym_adapter, 'env') and hasattr(self.gym_adapter.env, '_player'):
+                player = self.gym_adapter.env._player
+                inventory = {item: count for item, count in player.inventory.items() if count > 0}
+                achievements = player.achievements.copy()
+                
+                # Extract key game state information
+                game_state = {
+                    'health': player.health,
+                    'food': player.inventory.get('food', 0),
+                    'drink': player.inventory.get('drink', 0),
+                    'energy': player.inventory.get('energy', 0),
+                    'position': tuple(player.pos),
+                    'facing': tuple(player.facing),
+                    'sleeping': getattr(player, 'sleeping', False)
+                }
+            elif ob and 'inventory' in ob:
+                inventory = ob['inventory']
+                if 'game_state' in ob:
+                    game_state = ob['game_state']
+        except Exception as e:
+            print(f"⚠️ Error getting Crafter state: {e}")
+        
+        # Create state feature for similarity comparison and MCTS
+        state_feature = self._create_crafter_state_feature(inventory, game_state, achievements, step)
+        
+        # Get detected objects for scene analysis
+        detected_objects = []
+        if 'screen' in ob:
+            try:
+                detected_objects = self.eye.get_detected_objects_with_logging(
+                    self.detector, ob['screen'], f"State Creation Step {step}"
+                )
+            except Exception as e:
+                print(f"⚠️ Error detecting objects for state: {e}")
+        
+        # Create MCTS instance for this state
+        mcts = self._create_crafter_mcts(inventory, game_state, achievements, step)
+        
+        # Calculate progress score
+        progress_score = self._calculate_crafter_progress(achievements, inventory, detected_objects)
+        
+        # Create comprehensive state representation
+        state = {
+            'id': None,  # Will be set by long_memory
+            'state_feature': state_feature,
+            'object_ids': [obj.get('id') for obj in detected_objects if obj.get('id')],
+            'mcts': mcts,
+            'skill_clusters': [],
+            'inventory': inventory,
+            'game_state': game_state,
+            'achievements': achievements,
+            'detected_objects': detected_objects,
+            'step': step,
+            'timestamp': step,  # Use step as timestamp for Crafter
+            'progress_score': progress_score
+        }
+        
+        return state
+    
+    def _compare_crafter_progress(self, state1: Dict, state2: Dict) -> Dict[str, Any]:
+        """
+        Compare progress between two Crafter states.
+        
+        Args:
+            state1: First state dictionary
+            state2: Second state dictionary
+            
+        Returns:
+            Comparison results dictionary
+        """
+        comparison = {
+            'progress_difference': state2.get('progress_score', 0) - state1.get('progress_score', 0),
+            'new_achievements': [],
+            'inventory_changes': {},
+            'improvement_areas': []
+        }
+        
+        # Compare achievements
+        achievements1 = state1.get('achievements', {})
+        achievements2 = state2.get('achievements', {})
+        
+        for achievement, count2 in achievements2.items():
+            count1 = achievements1.get(achievement, 0)
+            if count2 > count1:
+                comparison['new_achievements'].append(achievement)
+        
+        # Compare inventory
+        inventory1 = state1.get('inventory', {})
+        inventory2 = state2.get('inventory', {})
+        
+        for item, count2 in inventory2.items():
+            count1 = inventory1.get(item, 0)
+            if count2 != count1:
+                comparison['inventory_changes'][item] = count2 - count1
+        
+        # Identify improvement areas
+        if comparison['progress_difference'] > 0:
+            comparison['improvement_areas'].append('overall_progress')
+        
+        if comparison['new_achievements']:
+            comparison['improvement_areas'].append('achievements')
+        
+        return comparison
+
     def close(self):
         """Close the agent and environment"""
         if hasattr(self, 'gym_adapter'):

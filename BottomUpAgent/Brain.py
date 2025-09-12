@@ -421,7 +421,7 @@ class Brain:
             print("No function call!")
             return None
     
-    def execute_environment_query(self, query_type, detected_objects, object_id=None, context_query=None):
+    def execute_environment_query(self, query_type, detected_objects, object_id=None, context_query=None, inventory=None, game_state=None):
         """Execute enhanced environment query with game-specific intelligence"""
         if query_type == "all_objects":
             return self._format_all_objects_enhanced(detected_objects)
@@ -436,7 +436,9 @@ class Brain:
         elif query_type == "game_state":
             return self._analyze_game_state(detected_objects)
         elif query_type == "scene_summary":
-            return self._generate_scene_summary(detected_objects)
+            return self._generate_scene_summary(detected_objects, inventory, game_state)
+        elif query_type == "available_actions":
+            return self._get_available_actions(detected_objects, inventory, game_state)
         else:
             return "Invalid query type or missing object_id for specific_object query"
     
@@ -610,20 +612,490 @@ class Brain:
         if important_objects:
             scene_data["important_objects"] = important_objects
         
-        # Add nearby objects around player (within 1 grid distance)
+        # Add decision hints prominently at the top level (will be updated with nearby info below)
+        decision_hints = []
+        if inventory:
+            scene_data["decision_hints"] = decision_hints  # Initialize empty, will be populated below
+        
+        # Add facing objects (only objects directly in front of player)
         if player_info:
             player_pos = player_info['position']
+            player_direction = player_info['direction']
+            
+            # Calculate the position the player is facing (only 1 grid away)
+            direction_map = {
+                'up': (-1, 0),    # row-1, col+0
+                'down': (1, 0),   # row+1, col+0  
+                'left': (0, -1),  # row+0, col-1
+                'right': (0, 1)   # row+0, col+1
+            }
+            
+            facing_offset = direction_map.get(player_direction, (0, 0))
+            facing_pos = (player_pos[0] + facing_offset[0], player_pos[1] + facing_offset[1])
+            
+            # Check what's at the facing position
+            facing_objects = []
+            immediate_actions = []
+            
+            if facing_pos in grid_map:
+                for obj_type in grid_map[facing_pos]:
+                    if obj_type not in ['empty']:
+                        facing_objects.append(f"{obj_type}@{facing_pos}")
+                        
+                        # Immediate actions based on what player is facing (with tool requirements)
+                        if obj_type == 'tree':  # Can collect wood immediately (no tools needed)
+                            immediate_actions.append(f"collect_wood@{facing_pos}")
+                        elif obj_type == 'water':  # Can collect drink immediately
+                            immediate_actions.append(f"collect_drink@{facing_pos}")
+                        elif obj_type == 'grass':  # Can collect sapling with 10% probability
+                            immediate_actions.append(f"collect_sapling@{facing_pos}")
+                        elif obj_type == 'cow':  # Can attack cow for food
+                            immediate_actions.append(f"attack_cow@{facing_pos}")
+                        elif obj_type == 'stone' and inventory.get('wood_pickaxe', 0) > 0:
+                            immediate_actions.append(f"collect_stone@{facing_pos}")
+                        elif obj_type == 'coal' and inventory.get('wood_pickaxe', 0) > 0:
+                            immediate_actions.append(f"collect_coal@{facing_pos}")
+                        elif obj_type == 'iron' and inventory.get('stone_pickaxe', 0) > 0:
+                            immediate_actions.append(f"collect_iron@{facing_pos}")
+                        elif obj_type == 'diamond' and inventory.get('iron_pickaxe', 0) > 0:
+                            immediate_actions.append(f"collect_diamond@{facing_pos}")
+                        elif obj_type == 'zombie':  # Can attack zombie
+                            immediate_actions.append(f"attack_zombie@{facing_pos}")
+                        elif obj_type == 'skeleton':  # Can attack skeleton
+                            immediate_actions.append(f"attack_skeleton@{facing_pos}")
+                        elif obj_type == 'plant':  # Can eat ripe plant
+                            immediate_actions.append(f"eat_plant@{facing_pos}")
+            
+            # Also add nearby objects for context (but not for interaction)
             nearby_objects = []
             for pos, objs in grid_map.items():
                 # Check if position is within 1 grid distance from player
                 if abs(pos[0] - player_pos[0]) <= 1 and abs(pos[1] - player_pos[1]) <= 1:
                     for obj_type in objs:
-                        if obj_type not in ['grass', 'empty']:
+                        if obj_type not in ['empty']:
                             nearby_objects.append(f"{obj_type}@{pos}")
-            if nearby_objects:
-                scene_data["nearby_objects"] = nearby_objects
+            
+            scene_data["facing_objects"] = facing_objects  # Objects player can interact with
+            scene_data["nearby_objects"] = nearby_objects  # All nearby objects for context
+            if immediate_actions:
+                scene_data["immediate_actions"] = immediate_actions
+        
+        # Add obstacle analysis for movement planning
+        if player_info:
+            player_pos = player_info['position']
+            walkable_terrain = ['grass', 'path', 'sand']
+            obstacles = ['stone', 'tree', 'water', 'coal', 'iron', 'diamond', 'table', 'furnace', 'lava']
+            
+            # Analyze movement directions
+            movement_analysis = {}
+            directions = {
+                'up': (player_pos[0] - 1, player_pos[1]),
+                'down': (player_pos[0] + 1, player_pos[1]),
+                'left': (player_pos[0], player_pos[1] - 1),
+                'right': (player_pos[0], player_pos[1] + 1)
+            }
+            
+            for direction, target_pos in directions.items():
+                if target_pos in grid_map:
+                    obj_types = grid_map[target_pos]
+                    if any(obs in obj_types for obs in obstacles):
+                        if 'lava' in obj_types:
+                            movement_analysis[direction] = "DEADLY_LAVA"
+                        else:
+                            movement_analysis[direction] = "BLOCKED"
+                    elif any(terrain in obj_types for terrain in walkable_terrain):
+                        movement_analysis[direction] = "CLEAR"
+                    else:
+                        movement_analysis[direction] = "UNKNOWN"
+                else:
+                    movement_analysis[direction] = "OUT_OF_BOUNDS"
+            
+            scene_data["movement_analysis"] = movement_analysis
+            
+            # Add movement constraint warnings
+            blocked_directions = [dir for dir, status in movement_analysis.items() if status == "BLOCKED"]
+            clear_directions = [dir for dir, status in movement_analysis.items() if status == "CLEAR"]
+            
+            if blocked_directions:
+                scene_data["movement_warnings"] = {
+                    "blocked_directions": blocked_directions,
+                    "clear_directions": clear_directions,
+                    "constraint": "Cannot place/craft when surrounded by obstacles - MOVE FIRST if all directions blocked"
+                }
+            
+            # Add decision hints based on current state and NEARBY objects (within 1 tile)
+            if inventory and player_info:
+                decision_hints = []
+                wood_count = inventory.get('wood', 0)
+                stone_count = inventory.get('stone', 0)
+                coal_count = inventory.get('coal', 0)
+                iron_count = inventory.get('iron', 0)
+                sapling_count = inventory.get('sapling', 0)
+                
+                # Check for NEARBY crafting utilities (within 1 grid distance)
+                nearby_table = False
+                nearby_furnace = False
+                
+                # Use nearby_objects list (already filtered for distance <= 1)
+                for nearby_obj in scene_data.get("nearby_objects", []):
+                    if "table@" in nearby_obj:
+                        nearby_table = True
+                    elif "furnace@" in nearby_obj:
+                        nearby_furnace = True
+                
+                # Generate comprehensive decision hints using achievement system
+                decision_hints = self._generate_achievement_decision_hints(
+                    inventory, scene_data, nearby_table, nearby_furnace
+                )
+                
+                if decision_hints:
+                    scene_data["decision_hints"] = decision_hints
         
         return scene_data
+    
+    def _generate_achievement_decision_hints(self, inventory, scene_data, nearby_table, nearby_furnace):
+        """Generate comprehensive decision hints based on all possible achievements"""
+        decision_hints = []
+        
+        if not inventory:
+            return decision_hints
+        
+        # Extract inventory counts
+        wood_count = inventory.get('wood', 0)
+        stone_count = inventory.get('stone', 0)
+        coal_count = inventory.get('coal', 0)
+        iron_count = inventory.get('iron', 0)
+        sapling_count = inventory.get('sapling', 0)
+        health = inventory.get('health', 9)
+        food = inventory.get('food', 9)
+        drink = inventory.get('drink', 9)
+        energy = inventory.get('energy', 9)
+        
+        # Get facing objects for resource collection checks (only objects player can interact with)
+        facing_objects = scene_data.get("facing_objects", [])
+        facing_objects_str = " ".join(facing_objects)
+        
+        # === COLLECTION ACHIEVEMENTS ===
+        
+        # collect_wood - can collect trees immediately (only if facing tree)
+        if "tree@" in facing_objects_str:
+            decision_hints.append("READY_TO_COLLECT_WOOD")
+        
+        # collect_drink - can collect water immediately (only if facing water)
+        if "water@" in facing_objects_str:
+            decision_hints.append("READY_TO_COLLECT_DRINK")
+        
+        # collect_sapling - can collect grass with 10% probability (only if facing grass)
+        if "grass@" in facing_objects_str:
+            decision_hints.append("READY_TO_COLLECT_SAPLING")
+        
+        # collect_stone - need wood_pickaxe (only if facing stone)
+        if "stone@" in facing_objects_str and inventory.get('wood_pickaxe', 0) > 0:
+            decision_hints.append("READY_TO_COLLECT_STONE")
+        
+        # collect_coal - need wood_pickaxe (only if facing coal)
+        if "coal@" in facing_objects_str and inventory.get('wood_pickaxe', 0) > 0:
+            decision_hints.append("READY_TO_COLLECT_COAL")
+        
+        # collect_iron - need stone_pickaxe (only if facing iron)
+        if "iron@" in facing_objects_str and inventory.get('stone_pickaxe', 0) > 0:
+            decision_hints.append("READY_TO_COLLECT_IRON")
+        
+        # collect_diamond - need iron_pickaxe (only if facing diamond)
+        if "diamond@" in facing_objects_str and inventory.get('iron_pickaxe', 0) > 0:
+            decision_hints.append("READY_TO_COLLECT_DIAMOND")
+        
+        # === COMBAT ACHIEVEMENTS ===
+        
+        # defeat_zombie - can attack zombies (only if facing zombie)
+        if "zombie@" in facing_objects_str:
+            decision_hints.append("READY_TO_DEFEAT_ZOMBIE")
+        
+        # defeat_skeleton - can attack skeletons (only if facing skeleton)
+        if "skeleton@" in facing_objects_str:
+            decision_hints.append("READY_TO_DEFEAT_SKELETON")
+        
+        # eat_cow - can attack cows for food (only if facing cow)
+        if "cow@" in facing_objects_str:
+            decision_hints.append("READY_TO_EAT_COW")
+        
+        # === CRAFTING ACHIEVEMENTS ===
+        
+        # place_table - need 2 wood
+        if wood_count >= 2 and not nearby_table:
+            decision_hints.append("READY_TO_PLACE_TABLE")
+        
+        # place_furnace - need 4 stone
+        if stone_count >= 4 and not nearby_furnace:
+            decision_hints.append("READY_TO_PLACE_FURNACE")
+        
+        # place_plant - need 1 sapling
+        if sapling_count >= 1:
+            decision_hints.append("READY_TO_PLANT_SAPLING")
+        
+        # place_stone - need 1 stone (can place anywhere)
+        if stone_count >= 1:
+            decision_hints.append("READY_TO_PLACE_STONE")
+        
+        # make_wood_pickaxe - need 1 wood + nearby table
+        if wood_count >= 1 and nearby_table:
+            decision_hints.append("READY_TO_CRAFT_WOOD_PICKAXE")
+        
+        # make_wood_sword - need 1 wood + nearby table
+        if wood_count >= 1 and nearby_table:
+            decision_hints.append("READY_TO_CRAFT_WOOD_SWORD")
+        
+        # make_stone_pickaxe - need 1 wood + 1 stone + nearby table
+        if wood_count >= 1 and stone_count >= 1 and nearby_table:
+            decision_hints.append("READY_TO_CRAFT_STONE_PICKAXE")
+        
+        # make_stone_sword - need 1 wood + 1 stone + nearby table
+        if wood_count >= 1 and stone_count >= 1 and nearby_table:
+            decision_hints.append("READY_TO_CRAFT_STONE_SWORD")
+        
+        # make_iron_pickaxe - need 1 wood + 1 coal + 1 iron + nearby table + nearby furnace
+        if wood_count >= 1 and coal_count >= 1 and iron_count >= 1 and nearby_table and nearby_furnace:
+            decision_hints.append("READY_TO_CRAFT_IRON_PICKAXE")
+        
+        # make_iron_sword - need 1 wood + 1 coal + 1 iron + nearby table + nearby furnace
+        if wood_count >= 1 and coal_count >= 1 and iron_count >= 1 and nearby_table and nearby_furnace:
+            decision_hints.append("READY_TO_CRAFT_IRON_SWORD")
+        
+        # === SURVIVAL ACHIEVEMENTS ===
+        
+        # eat_plant - need to find and wait for plants to ripen (only if facing plant)
+        if "plant@" in facing_objects_str:
+            decision_hints.append("READY_TO_EAT_PLANT")
+        
+        # wake_up - need to sleep when energy is low
+        if energy < 3:
+            decision_hints.append("READY_TO_SLEEP")
+        
+        # === PRIORITY SORTING ===
+        
+        # Sort hints by priority (survival > collection > crafting > combat)
+        priority_order = {
+            "READY_TO_SLEEP": 1,
+            "READY_TO_COLLECT_DRINK": 2,
+            "READY_TO_COLLECT_WOOD": 3,
+            "READY_TO_PLACE_TABLE": 4,
+            "READY_TO_CRAFT_WOOD_PICKAXE": 5,
+            "READY_TO_CRAFT_WOOD_SWORD": 6,
+            "READY_TO_COLLECT_STONE": 7,
+            "READY_TO_CRAFT_STONE_PICKAXE": 8,
+            "READY_TO_CRAFT_STONE_SWORD": 9,
+            "READY_TO_PLACE_FURNACE": 10,
+            "READY_TO_COLLECT_COAL": 11,
+            "READY_TO_COLLECT_IRON": 12,
+            "READY_TO_CRAFT_IRON_PICKAXE": 13,
+            "READY_TO_CRAFT_IRON_SWORD": 14,
+            "READY_TO_COLLECT_DIAMOND": 15,
+            "READY_TO_DEFEAT_ZOMBIE": 16,
+            "READY_TO_DEFEAT_SKELETON": 17,
+            "READY_TO_EAT_COW": 18,
+            "READY_TO_EAT_PLANT": 19,
+            "READY_TO_PLANT_SAPLING": 20,
+            "READY_TO_PLACE_STONE": 21,
+            "READY_TO_COLLECT_SAPLING": 22,
+        }
+        
+        # Sort by priority, then by alphabetical order
+        decision_hints.sort(key=lambda x: (priority_order.get(x, 99), x))
+        
+        return decision_hints
+    
+    def _get_available_actions(self, detected_objects, inventory=None, game_state=None):
+        """Get prioritized list of actions the player can execute right now"""
+        if not detected_objects:
+            return {
+                "available_actions": [],
+                "priority_actions": [],
+                "message": "No environment data available"
+            }
+        
+        # For Crafter, use the comprehensive achievement system
+        if self.game_name == "Crafter":
+            return self._get_crafter_available_actions(detected_objects, inventory, game_state)
+        
+        # For other games, provide general action suggestions
+        return self._get_general_available_actions(detected_objects)
+    
+    def _get_crafter_available_actions(self, detected_objects, inventory, game_state):
+        """Get Crafter-specific available actions with detailed prerequisites"""
+        if not inventory:
+            return {
+                "available_actions": [],
+                "priority_actions": [],
+                "message": "No inventory data available"
+            }
+        
+        # Generate scene data for analysis
+        scene_summary = self._generate_crafter_scene_summary(detected_objects, inventory, game_state)
+        
+        # Extract decision hints from scene summary
+        decision_hints = scene_summary.get("decision_hints", [])
+        nearby_objects = scene_summary.get("nearby_objects", [])
+        immediate_actions = scene_summary.get("immediate_actions", [])
+        
+        # Categorize actions by type
+        action_categories = {
+            "immediate_collection": [],
+            "crafting": [],
+            "placement": [],
+            "combat": [],
+            "survival": [],
+            "movement": []
+        }
+        
+        # Process decision hints into categorized actions
+        for hint in decision_hints:
+            if "COLLECT" in hint:
+                action_categories["immediate_collection"].append(hint)
+            elif "CRAFT" in hint:
+                action_categories["crafting"].append(hint)
+            elif "PLACE" in hint or "PLANT" in hint:
+                action_categories["placement"].append(hint)
+            elif "DEFEAT" in hint or "EAT" in hint:
+                action_categories["combat"].append(hint)
+            elif "SLEEP" in hint:
+                action_categories["survival"].append(hint)
+        
+        # Add movement actions if there are clear paths
+        movement_analysis = scene_summary.get("movement_analysis", {})
+        for direction, status in movement_analysis.items():
+            if status == "CLEAR":
+                action_categories["movement"].append(f"MOVE_{direction.upper()}")
+        
+        # Create detailed action list with prerequisites
+        detailed_actions = []
+        priority_actions = []
+        
+        # Survival actions (highest priority)
+        for action in action_categories["survival"]:
+            if action == "READY_TO_SLEEP":
+                detailed_actions.append({
+                    "action": "sleep",
+                    "description": "Sleep to restore energy (energy < 3)",
+                    "priority": 1,
+                    "prerequisites": {"energy": "< 3"},
+                    "keyboard_action": "TAB"
+                })
+                priority_actions.append("sleep")
+        
+        # Immediate collection (high priority)
+        for action in action_categories["immediate_collection"]:
+            if action == "READY_TO_COLLECT_WOOD":
+                detailed_actions.append({
+                    "action": "interact",
+                    "description": "Collect wood from nearby trees (no tool required)",
+                    "priority": 2,
+                    "prerequisites": {"nearby": "tree", "tools": "none"},
+                    "keyboard_action": "SPACE/INTERACT"
+                })
+                priority_actions.append("collect_wood")
+            elif action == "READY_TO_COLLECT_DRINK":
+                detailed_actions.append({
+                    "action": "interact", 
+                    "description": "Collect water from nearby water source",
+                    "priority": 2,
+                    "prerequisites": {"nearby": "water", "tools": "none"},
+                    "keyboard_action": "SPACE/INTERACT"
+                })
+                priority_actions.append("collect_drink")
+        
+        # Crafting actions
+        for action in action_categories["crafting"]:
+            if action == "READY_TO_CRAFT_WOOD_PICKAXE":
+                detailed_actions.append({
+                    "action": "craft_wood_pickaxe",
+                    "description": "Craft wood pickaxe (requires: 1 wood + nearby table)",
+                    "priority": 3,
+                    "prerequisites": {"wood": ">= 1", "nearby": "table"},
+                    "keyboard_action": "Key 1"
+                })
+                priority_actions.append("craft_wood_pickaxe")
+        
+        # Placement actions (only if player has clear space nearby)
+        for action in action_categories["placement"]:
+            if action == "READY_TO_PLACE_TABLE":
+                # Check if player has at least one clear adjacent space for placement
+                movement_analysis = scene_summary.get("movement_analysis", {})
+                has_clear_space = any(status == "CLEAR" for status in movement_analysis.values())
+                
+                if has_clear_space:
+                    detailed_actions.append({
+                        "action": "place_table",
+                        "description": "Place crafting table (requires: 2 wood + clear adjacent space)",
+                        "priority": 4,
+                        "prerequisites": {"wood": ">= 2", "adjacent_space": "clear"},
+                        "keyboard_action": "Key T"
+                    })
+                    priority_actions.append("place_table")
+                else:
+                    detailed_actions.append({
+                        "action": "move_to_clear_space",
+                        "description": "Move to find clear space for placing table (BLOCKED - need to move first)",
+                        "priority": 3,
+                        "prerequisites": {"current_space": "blocked", "need": "clear_space"},
+                        "keyboard_action": "WASD to move"
+                    })
+                    priority_actions.append("move_to_clear_space")
+        
+        # Combat actions
+        for action in action_categories["combat"]:
+            if "COW" in action:
+                detailed_actions.append({
+                    "action": "interact",
+                    "description": "Attack cow for food (requires: facing cow)",
+                    "priority": 5,
+                    "prerequisites": {"nearby": "cow"},
+                    "keyboard_action": "SPACE/INTERACT"
+                })
+                priority_actions.append("attack_cow")
+        
+        # Movement actions
+        for action in action_categories["movement"]:
+            direction = action.replace("MOVE_", "").lower()
+            detailed_actions.append({
+                "action": f"move_{direction}",
+                "description": f"Move {direction} (path is clear)",
+                "priority": 6,
+                "prerequisites": {"path": "clear"},
+                "keyboard_action": f"Key {direction.upper()}"
+            })
+        
+        # Sort by priority
+        detailed_actions.sort(key=lambda x: x["priority"])
+        
+        return {
+            "available_actions": detailed_actions,
+            "priority_actions": priority_actions[:3],  # Top 3 priorities
+            "action_categories": action_categories,
+            "immediate_actions": immediate_actions,
+            "nearby_objects": nearby_objects,
+            "message": f"Found {len(detailed_actions)} available actions, {len(priority_actions)} high priority"
+        }
+    
+    def _get_general_available_actions(self, detected_objects):
+        """Get general available actions for non-Crafter games"""
+        clickable_objects = [obj for obj in detected_objects 
+                           if obj.get('interactivity') not in ['no_effect', 'unknown']]
+        
+        actions = []
+        if clickable_objects:
+            actions.append({
+                "action": "Click",
+                "description": f"Click on {len(clickable_objects)} available interactive elements",
+                "priority": 1,
+                "prerequisites": {"objects": "clickable"},
+                "count": len(clickable_objects)
+            })
+        
+        return {
+            "available_actions": actions,
+            "priority_actions": ["Click"] if clickable_objects else [],
+            "message": f"Found {len(clickable_objects)} clickable objects"
+        }
     
     def _format_all_objects_enhanced(self, detected_objects):
         """Enhanced all objects formatting with intelligent categorization"""
@@ -1396,7 +1868,9 @@ class Brain:
                     function_input['query_type'],
                     detected_objects,
                     function_input.get('object_id'),
-                    function_input.get('context_query')
+                    function_input.get('context_query'),
+                    state.get('inventory') if state else None,
+                    state.get('game_state') if state else None
                 )
                 
                 # Add to conversation context
@@ -1510,6 +1984,9 @@ class Brain:
         
         print(f"MCP max iterations ({max_iterations}) reached without final decision. Falling back to intelligent decision.")
         
+        # Import random for fallback operations
+        import random
+        
         # Get clickable objects for random selection
         clickable_objects = [obj for obj in detected_objects if obj.get('interactivity') == 'clickable']
         
@@ -1620,6 +2097,360 @@ class Brain:
         
         return base_prompt
     
+    def _build_streaming_mcp_prompt(self, task, conversation_context, streaming_conversation, iteration, max_iterations):
+        """Build optimized streaming MCP prompt with minimal token usage"""
+        remaining_iterations = max_iterations - iteration
+        
+        # First iteration: minimal setup
+        if iteration == 0:
+            base_prompt = f"""You are playing {self.game_name}. Task: '{task}'
+
+🔧 AVAILABLE TOOLS:
+1. query_environment - Get game information (try 'available_actions' for prioritized actions)
+2. Direct actions: {self._get_game_specific_direct_actions()}
+
+⚡ RULES:
+- You have {max_iterations} total iterations
+- Take action when you have enough information
+- For Crafter: use 'interact' on trees/stones immediately when nearby
+- ALWAYS prioritize ready actions over exploration
+- ⚠️ CRITICAL: Check movement_analysis - if BLOCKED, MOVE FIRST before placing/crafting
+- ⚠️ CRITICAL: ONLY use 'interact' when facing_objects contains something you can interact with
+- ⚠️ CRITICAL: If facing_objects is empty, MOVE FIRST to face an object before interacting
+
+What do you want to do?"""
+        
+        # Subsequent iterations: add conversation context
+        else:
+            base_prompt = f"""Continuing {self.game_name} task: '{task}'
+
+🔧 AVAILABLE TOOLS:
+1. query_environment - Get game information (try 'available_actions' for prioritized actions)
+2. Direct actions: {self._get_game_specific_direct_actions()}
+
+⚡ RULES:
+- {remaining_iterations} iterations remaining
+- Take action when ready
+- ⚠️ CRITICAL: ONLY use 'interact' when facing_objects contains something
+- ⚠️ CRITICAL: If facing_objects is empty, MOVE FIRST before interacting
+
+📋 CONVERSATION:"""
+            
+            # Add only recent conversation context (last 2-3 exchanges)
+            recent_context = streaming_conversation[-3:] if len(streaming_conversation) > 3 else streaming_conversation
+            
+            # Check for decision hints in recent results and prioritize them
+            decision_hints_found = []
+            for exchange in recent_context:
+                if 'result' in exchange and isinstance(exchange['result'], dict):
+                    hints = exchange['result'].get('decision_hints', [])
+                    if hints:
+                        decision_hints_found.extend(hints)
+            
+            # Add decision hints prominently if found
+            if decision_hints_found:
+                base_prompt += f"\n\n🎯 HIGH PRIORITY ACTIONS AVAILABLE:"
+                for hint in decision_hints_found[:3]:  # Show top 3 hints
+                    base_prompt += f"\n- {hint}"
+                base_prompt += f"\n\n⚠️ PRIORITIZE these actions above exploration!"
+            
+            # Check for facing_objects information and add critical guidance
+            facing_objects_found = []
+            for exchange in recent_context:
+                if 'result' in exchange and isinstance(exchange['result'], dict):
+                    facing = exchange['result'].get('facing_objects', [])
+                    if facing:
+                        facing_objects_found = facing
+            
+            if facing_objects_found:
+                base_prompt += f"\n\n👀 FACING OBJECTS: {facing_objects_found}"
+                base_prompt += f"\n✅ You CAN interact with these objects using 'interact' action"
+            else:
+                base_prompt += f"\n\n👀 FACING OBJECTS: []"
+                base_prompt += f"\n❌ You CANNOT interact - facing_objects is empty! MOVE FIRST to face an object!"
+            
+            for i, exchange in enumerate(recent_context):
+                if 'query' in exchange:
+                    base_prompt += f"\n{i+1}. You queried: {exchange['query'].get('query_type', 'unknown')}"
+                if 'result' in exchange:
+                    # Truncate long results to save tokens, but preserve decision_hints
+                    result_str = str(exchange['result'])
+                    if len(result_str) > 200:
+                        result_str = result_str[:200] + "..."
+                    base_prompt += f"\n   Result: {result_str}"
+                if 'action' in exchange:
+                    base_prompt += f"\n   Action: {exchange['action']}"
+            
+            base_prompt += "\n\nWhat's your next move?"
+        
+        return base_prompt
+    
+    def do_operation_mcp_streaming(self, step, task, state, detected_objects, pre_knowledge=None, max_iterations=None):
+        """Optimized streaming MCP-style operation with minimal token usage"""
+        # Get max_iterations from config if not provided
+        if max_iterations is None:
+            max_iterations = self.max_mcp_iter
+        
+        # Initialize conversation_context with relevant historical context
+        conversation_context = []
+        
+        # Get relevant historical context from previous MCP sessions
+        historical_contexts = self._get_relevant_historical_context(task)
+        if historical_contexts:
+            # Add historical context as initial context
+            historical_summary = self._build_historical_context_summary(historical_contexts)
+            conversation_context.append({
+                'iteration': 0,
+                'query': {'query_type': 'historical_context', 'task': task},
+                'result': historical_summary
+            })
+            print(f"Initialized MCP with {len(historical_contexts)} relevant historical contexts")
+        
+        # Enhanced first iteration for Crafter - proactively gather key information
+        if self.game_name == "Crafter" and len(conversation_context) == 0:
+            print("🎯 Crafter: Proactively gathering key information in first iteration...")
+            
+            # Gather comprehensive scene information upfront
+            scene_summary = self._generate_crafter_scene_summary(detected_objects, state.get('inventory'), state.get('game_state'))
+            conversation_context.append({
+                'iteration': 0,
+                'query': {'query_type': 'scene_summary', 'game': 'Crafter'},
+                'result': scene_summary
+            })
+            print(f"✅ Crafter scene summary gathered: {len(scene_summary)} characters")
+        
+        # Initialize streaming conversation
+        streaming_conversation = []
+        
+        for iteration in range(max_iterations):
+            print(f"MCP Iteration {iteration + 1}/{max_iterations}")
+            
+            # Build streaming prompt - only include essential information
+            current_prompt = self._build_streaming_mcp_prompt(
+                task, conversation_context, streaming_conversation, iteration, max_iterations
+            )
+            
+            # Debug: Print simplified MCP iteration info
+            print(f"🔄 MCP Iteration {iteration + 1}/{max_iterations}: Streaming prompt and calling LLM...")
+            
+            # Enhanced image handling for Crafter
+            if self.game_name == "Crafter":
+                # For Crafter, always pass image on first iteration, then only when needed
+                if iteration == 0 or any('scene_summary' in str(ctx.get('query', {})) for ctx in conversation_context[-2:]):
+                    imgs_64 = [cv_to_base64(state['screen'])]
+                    print(f"🖼️ Passing screen image for Crafter (iteration {iteration + 1})")
+                else:
+                    imgs_64 = []
+                    print(f"📊 Using structured data only (iteration {iteration + 1})")
+            else:
+                # Original logic for other games
+                if iteration == 0 or any('scene_summary' in str(ctx.get('query', {})) for ctx in conversation_context[-2:]):
+                    imgs_64 = [cv_to_base64(state['screen'])]
+                else:
+                    imgs_64 = []
+            
+            try:
+                # Use streaming prompt without pre_knowledge for efficiency
+                response = self.base_model.call_text_images(
+                    current_prompt, 
+                    imgs_64, 
+                    self.mcp_interaction_tools
+                    # Note: pre_knowledge removed for streaming efficiency
+                )
+                
+            except Exception as api_error:
+                print(f"❌ MCP API call failed: {api_error}")
+                print(f"⚠️ Falling back to random exploration due to API error")
+                
+                # Fallback to random exploration when API fails
+                if self.game_name == "Crafter":
+                    import random
+                    crafter_operations = ['move_left', 'move_right', 'move_up', 'move_down', 'interact', 'sleep']
+                    selected_operation = random.choice(crafter_operations)
+                    
+                    print(f"🎲 API Fallback: {selected_operation} for Crafter")
+                    
+                    return {
+                        "action_type": "direct_operation",
+                        "operate": selected_operation,
+                        "params": {},
+                        "fallback_decision": True,
+                        "reason": "MCP API failed, using random Crafter keyboard action"
+                    }
+                else:
+                    # For other games, use click operations
+                    clickable_objects = [obj for obj in detected_objects if obj.get('interactivity') == 'clickable']
+                    if not clickable_objects:
+                        clickable_objects = detected_objects
+                    
+                    if clickable_objects:
+                        import random
+                        selected_obj = random.choice(clickable_objects)
+                        operations = ['Click', 'RightSingle', 'LeftDouble']
+                        selected_operation = random.choice(operations)
+                        
+                        print(f"🎲 API Fallback: {selected_operation} on object {selected_obj.get('id', 'unknown')} at {selected_obj['center']}")
+                        
+                        return {
+                            "action_type": "direct_operation",
+                            "operate": selected_operation,
+                            "params": {"coordinate": selected_obj['center']},
+                            "fallback_decision": True,
+                            "selected_object": selected_obj
+                        }
+                    else:
+                        print("❌ No objects available for fallback")
+                        return None
+            
+            print(f"MCP Response: {response}")
+            
+            # Log token usage if available
+            if response and 'usage' in response:
+                self.logger.log({
+                    f"eval/tokens/mcp_streaming_iteration_{iteration+1}/input": response['usage']['input'],
+                    f"eval/tokens/mcp_streaming_iteration_{iteration+1}/output": response['usage']['output'],
+                    f"eval/tokens/mcp_streaming_iteration_{iteration+1}/total": response['usage']['total']
+                }, step)
+            
+            if response['function'] is None:
+                print("No function call in MCP response")
+                return None
+            
+            function_name = response['function']['name']
+            function_input = response['function']['input']
+            
+            # Add to streaming conversation
+            streaming_conversation.append({
+                'iteration': iteration + 1,
+                'query': function_input if function_name == 'query_environment' else {'action': function_name},
+                'result': None  # Will be filled below
+            })
+            
+            if function_name == 'query_environment':
+                # Execute environment query
+                query_result = self.execute_environment_query(
+                    function_input['query_type'],
+                    detected_objects,
+                    function_input.get('object_id'),
+                    function_input.get('context_query'),
+                    state.get('inventory') if state else None,
+                    state.get('game_state') if state else None
+                )
+                
+                # Update streaming conversation with result
+                streaming_conversation[-1]['result'] = query_result
+                
+                # Add to conversation context
+                conversation_context.append({
+                    'iteration': iteration + 1,
+                    'query': function_input,
+                    'result': query_result
+                })
+                
+                # Continue to next iteration
+                continue
+                
+            elif function_name == 'select_skill':
+                # Execute skill selection
+                print(f"MCP selected skill ID: {function_input['id']}")
+                
+                # Save conversation to history before returning
+                final_decision = {
+                    "action_type": "select_skill",
+                    "skill_id": int(function_input['id'])
+                }
+                self._save_conversation_to_history(conversation_context, task, final_decision)
+                
+                return {
+                    "action_type": "select_skill",
+                    "skill_id": int(function_input['id']),
+                    "conversation_context": conversation_context
+                }
+                
+            elif function_name in ['Click', 'RightSingle', 'LeftDouble', 'Type', 'Drag', 'Finished'] or \
+                 function_name in ['move_up', 'move_down', 'move_left', 'move_right', 'interact', 'sleep', 
+                                   'place_table', 'place_stone', 'place_furnace', 'plant_sapling',
+                                   'craft_wood_pickaxe', 'craft_stone_pickaxe', 'craft_iron_pickaxe',
+                                   'craft_wood_sword', 'craft_stone_sword', 'craft_iron_sword']:
+                # Direct operation
+                print(f"MCP selected operation: {function_name}")
+                
+                # Update streaming conversation
+                streaming_conversation[-1]['action'] = function_name
+                streaming_conversation[-1]['result'] = "Action selected"
+                
+                # Save conversation to history before returning
+                final_decision = {
+                    "action_type": "direct_operation",
+                    "operate": function_name,
+                    "params": function_input
+                }
+                self._save_conversation_to_history(conversation_context, task, final_decision)
+                
+                return {
+                    "action_type": "direct_operation",
+                    "operate": function_name,
+                    "params": function_input,
+                    "conversation_context": conversation_context
+                }
+            
+            else:
+                print(f"Unknown function: {function_name}")
+                return None
+        
+        # If we reach here, no decision was made within max_iterations
+        print(f"⚠️ No decision made within {max_iterations} iterations")
+        
+        # Fallback decision
+        if detected_objects:
+            import random
+            selected_obj = random.choice(detected_objects)
+            operations = ['Click', 'RightSingle', 'LeftDouble']
+            selected_operation = random.choice(operations)
+            
+            print(f"🎲 Fallback decision: {selected_operation} on object {selected_obj.get('id', 'unknown')} at {selected_obj['center']}")
+            
+            final_decision = {
+                "action_type": "direct_operation",
+                "operate": selected_operation,
+                "params": {"coordinate": selected_obj['center']},
+                "object_id": selected_obj.get('id'),
+                "fallback_decision": True
+            }
+            self._save_conversation_to_history(conversation_context, task, final_decision)
+            
+            return {
+                "action_type": "direct_operation",
+                "operate": selected_operation,
+                "params": {"coordinate": selected_obj['center']},
+                "object_id": selected_obj.get('id'),
+                "conversation_context": conversation_context,
+                "fallback_decision": True,
+                "selected_object": selected_obj
+            }
+        else:
+            # Ultimate fallback if no objects detected
+            print("No objects detected, using center screen click as last resort")
+            
+            final_decision = {
+                "action_type": "direct_operation",
+                "operate": "Click",
+                "params": {"coordinate": [640, 360]},
+                "object_id": None,
+                "fallback_decision": True
+            }
+            self._save_conversation_to_history(conversation_context, task, final_decision)
+            
+            return {
+                "action_type": "direct_operation",
+                "operate": "Click",
+                "params": {"coordinate": [640, 360]},
+                "object_id": None,
+                "conversation_context": conversation_context,
+                "fallback_decision": True,
+                "fallback_reason": "no_objects_detected"
+            }
+    
     def _get_game_specific_operation_guidance(self):
         """Get operation guidance specific to the current game"""
         if self.game_name.lower() in ['slay the spire', 'sts']:
@@ -1636,11 +2467,14 @@ class Brain:
   * D (right): Increases column coordinate (col+1) - moves toward larger column numbers
 - Player facing direction follows same coordinate logic
 - SPACE/INTERACT: Primary interaction (collect, attack, eat)
-  * Use 'interact' action when facing trees, stones, creatures, or any collectible resources
-  * CRITICAL: When you see trees, stones, or other materials and you're adjacent to them, use 'interact' to collect
+  * Use 'interact' action ONLY when facing trees, stones, creatures, or any collectible resources
+  * CRITICAL: You can ONLY interact with objects DIRECTLY in front of you (1 grid away)
+  * CRITICAL: You CANNOT interact with objects to your sides or behind you
   * This is the ONLY way to gather resources in Crafter - you must use interact/SPACE when facing materials
   * RESOURCE COLLECTION REQUIREMENTS:
     - Trees → wood (no tool required)
+    - Grass → sapling (10% probability, no tool required)
+    - Water → drink (no tool required)
     - Stone/Coal → requires wood pickaxe (craft first: 1 wood + table)
     - Iron → requires stone pickaxe (craft first: 1 wood + 1 stone + table)
     - Diamond → requires iron pickaxe (craft first: 1 wood + 1 coal + 1 iron + table + furnace)
@@ -1650,13 +2484,20 @@ class Brain:
 - TAB: Sleep to restore energy
 - Number keys 1-6: Craft tools and weapons
 - Letter keys T,R,F,P: Place structures (table, stone, furnace, plant)
+- CRITICAL MOVEMENT CONSTRAINTS:
+  * ⚠️ BLOCKED MOVEMENT: You CANNOT move through solid objects (stones, trees, etc.)
+  * ⚠️ PLACEMENT REQUIREMENTS: You CANNOT place items (table, furnace, etc.) when surrounded by obstacles
+  * ⚠️ MOVE FIRST: Always ensure you have clear adjacent space before placing structures
+  * ⚠️ CHECK MOVEMENT_ANALYSIS: Look for "BLOCKED" vs "CLEAR" in scene data
+  * ⚠️ IF BLOCKED: You must move to a clear area before placing/crafting anything
 - CRITICAL GAME MECHANICS:
   * Player character is ALWAYS at the center of the screen
   * Objects/targets move toward the player through player movement, not the other way around
   * When you want to reach an object, move in the direction that brings the object closer to the center
   * Short-term goals should be achieved by making targets approach the player's central position
   * UP=row-1, DOWN=row+1, LEFT=col-1, RIGHT=col+1
-  * RESOURCE COLLECTION: Always use 'interact' when adjacent to trees, stones, or other collectibles"""
+  * RESOURCE COLLECTION: Always use 'interact' when adjacent to trees, stones, or other collectibles
+  * MOVEMENT PRIORITY: If surrounded by obstacles, MOVE FIRST before attempting to place/craft anything"""
         else:
             return """- For UI ELEMENTS: Use Click for buttons, menus, selections
 - Use Drag when moving objects to specific destinations

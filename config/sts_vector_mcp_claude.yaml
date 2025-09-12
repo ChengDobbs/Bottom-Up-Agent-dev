@@ -102,6 +102,51 @@ experimental:
   semantic_clustering: false # Semantic clustering
   temporal_tracking: false   # Temporal tracking
 
+# MCP Tools Configuration
+mcp_tools:
+  # Environment-specific tool configuration
+  environment_tools:
+    - "query_environment"  # Query current UI environment information
+  
+  # Skill management tools
+  skill_tools:
+    - "select_skill"       # Select the best skill from candidates
+  
+  # Operation execution tools (rich GUI interaction for Slay the Spire)
+  operation_tools:
+    - "Click"              # Left click at coordinates
+    - "RightSingle"        # Right click at coordinates
+    - "LeftDouble"         # Double click at coordinates
+    - "Type"               # Type text input
+    - "Drag"               # Drag from one coordinate to another
+    - "Finished"           # Mark task as completed
+    
+  # Slay the Spire specific tools (card game interactions)
+  game_specific_tools:
+    - "card_interactions"   # Play cards, target selection
+    - "menu_navigation"     # Navigate game menus and screens
+    - "combat_actions"      # Combat-specific actions (end turn, potions)
+    - "map_navigation"      # Navigate the map between battles
+    - "shop_interactions"   # Buy/sell items in shops
+    - "campfire_actions"    # Rest, upgrade, smith at campfires
+    - "event_choices"       # Make choices in random events
+    
+  # Tool availability by game phase/mode
+  exploration_mode:
+    enabled_tools: ["query_environment", "Click", "menu_navigation", "map_navigation"]
+  
+  combat_mode:
+    enabled_tools: ["query_environment", "Click", "Drag", "card_interactions", "combat_actions"]
+  
+  menu_mode:
+    enabled_tools: ["query_environment", "Click", "Type", "menu_navigation", "shop_interactions", "campfire_actions", "event_choices"]
+  
+  skill_learning_mode:
+    enabled_tools: ["query_environment", "select_skill", "Type", "Finished"]
+  
+  full_mode:
+    enabled_tools: "all"  # Use all available tools
+
 eye:
   width: 1280
   height: 720

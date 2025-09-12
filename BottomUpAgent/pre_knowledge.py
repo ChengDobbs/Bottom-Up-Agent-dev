@@ -134,11 +134,67 @@ Respond only with action instructions or a thought-action reasoning trace.
         return f"""
 You are playing Crafter, a 2D survival crafting game. Your goal is to earn all 22 achievements in a single episode through strategic resource management and progression.
 
+🎯 **22 ACHIEVEMENTS BY DIFFICULTY LEVEL:**
+
+**LEVEL 1 - BASIC SURVIVAL (Immediate Actions):**
+- collect_wood: Use 'interact' when facing trees (no tool required)
+- collect_drink: Use 'interact' when facing water (no tool required)  
+- collect_sapling: Use 'interact' when facing grass (10% chance, no tool required)
+- eat_cow: Use 'interact' when facing cows (no tool required)
+- wake_up: Use 'sleep' when energy < 9, then wake up naturally
+
+**LEVEL 2 - INFRASTRUCTURE (Requires 2+ wood):**
+- place_table: Use 'place_table' when you have 2+ wood (requires grass/sand/path terrain)
+- place_plant: Use 'place_plant' when you have 1+ sapling (requires grass terrain)
+
+**LEVEL 3 - BASIC TOOLS (Requires table nearby):**
+- make_wood_pickaxe: Use 'craft_wood_pickaxe' (requires 1 wood + table within 1 tile)
+- make_wood_sword: Use 'craft_wood_sword' (requires 1 wood + table within 1 tile)
+- eat_plant: Use 'interact' when facing plants (no tool required)
+
+**LEVEL 4 - INTERMEDIATE RESOURCES (Requires wood_pickaxe):**
+- collect_coal: Use 'interact' when facing coal with wood_pickaxe in inventory
+- collect_stone: Use 'interact' when facing stone with wood_pickaxe in inventory
+
+**LEVEL 5 - INTERMEDIATE TOOLS (Requires stone + table nearby):**
+- make_stone_pickaxe: Use 'craft_stone_pickaxe' (requires 1 wood + 1 stone + table within 1 tile)
+- make_stone_sword: Use 'craft_stone_sword' (requires 1 wood + 1 stone + table within 1 tile)
+- place_stone: Use 'place_stone' when you have 1+ stone (can place on grass/sand/path/water/lava)
+
+**LEVEL 6 - ADVANCED RESOURCES (Requires stone_pickaxe + furnace):**
+- collect_iron: Use 'interact' when facing iron with stone_pickaxe in inventory
+- place_furnace: Use 'place_furnace' when you have 4+ stone (requires grass/sand/path terrain)
+
+**LEVEL 7 - ADVANCED TOOLS (Requires iron + table + furnace nearby):**
+- make_iron_pickaxe: Use 'craft_iron_pickaxe' (requires 1 wood + 1 coal + 1 iron + table AND furnace within 1 tile)
+- make_iron_sword: Use 'craft_iron_sword' (requires 1 wood + 1 coal + 1 iron + table AND furnace within 1 tile)
+
+**LEVEL 8 - MASTER RESOURCES (Requires iron_pickaxe):**
+- collect_diamond: Use 'interact' when facing diamond with iron_pickaxe in inventory
+
+**COMBAT ACHIEVEMENTS (Parallel to all levels):**
+- defeat_zombie: Use 'interact' to attack zombies (requires any sword for efficiency)
+- defeat_skeleton: Use 'interact' to attack skeletons (requires any sword for efficiency)
+
+⚠️ **CRITICAL GAME MECHANICS:**
+- **"Nearby" means within 1 tile (8 surrounding squares)** - you must be adjacent to table/furnace when crafting
+- **Sleeping vulnerability**: Monsters deal 7 damage when you're sleeping vs 2 when awake
+- **Tool progression is mandatory**: Cannot collect stone/coal without wood_pickaxe, iron without stone_pickaxe, diamond without iron_pickaxe
+- **Terrain requirements**: Tables/furnaces can only be placed on grass/sand/path, plants only on grass
+
 **CORE MECHANICS:**
 - 2D world with terrain types: grass, stone, tree, water, coal, iron, diamond
 - Creatures: zombies, skeletons (hostile), cows (food source)
 - Vital stats: Health, Food, Drink, Energy (each 0-9)
 - Time progression requires careful resource management
+
+🚧 **MOVEMENT & OBSTACLE RULES:**
+- **WALKABLE TERRAIN** (can move freely): grass, path, sand
+- **OBSTACLES** (cannot move through): stone, tree, water, coal, iron, diamond, table, furnace
+- **DEADLY TERRAIN**: lava (touching = instant death)
+- **ONE OBJECT PER GRID**: Each grid cell can only contain one object/terrain type
+- **MOVEMENT BLOCKING**: If facing an obstacle, must collect/remove it before moving
+- **PATHFINDING**: Plan routes using only walkable terrain (grass/path/sand)
 
 **KEYBOARD CONTROLS & ACTIONS:**
 • WASD: Movement (actions 1-4)
@@ -146,25 +202,22 @@ You are playing Crafter, a 2D survival crafting game. Your goal is to earn all 2
   - A (left): Decreases column coordinate (col-1) 
   - S (down): Increases row coordinate (row+1)
   - D (right): Increases column coordinate (col+1)
-• SPACE: Primary interaction - collect/attack/eat (action 5)
-  ⚠️ CRITICAL: Use SPACE/interact when facing trees, stones, creatures, or any resources
+• interact: Primary interaction - collect/attack/eat (action 5)
+  ⚠️ CRITICAL: Use 'interact' when facing trees, stones, creatures, or any resources
   ⚠️ This is the ONLY way to collect materials - you MUST use interact when adjacent to collectibles
-  ⚠️ RESOURCE COLLECTION REQUIREMENTS:
-    - Trees → wood (no tool required)
-    - Stone/Coal → requires wood pickaxe (craft first: 1 wood + table)
-    - Iron → requires stone pickaxe (craft first: 1 wood + 1 stone + table)
-    - Diamond → requires iron pickaxe (craft first: 1 wood + 1 coal + 1 iron + table + furnace)
-  ⚠️ NEVER attempt to collect stone/coal without wood pickaxe in inventory
-  ⚠️ NEVER attempt to collect iron without stone pickaxe in inventory
-  ⚠️ NEVER attempt to collect diamond without iron pickaxe in inventory
-• TAB: Sleep to restore energy (action 6)
-• T: Place crafting table (action 8)
-• R: Place stone block (action 7)
-• F: Place furnace (action 9)
-• P: Plant sapling (action 10)
-• 1-6: Craft tools and weapons (actions 11-16)
-  - 1: Wood pickaxe  - 2: Stone pickaxe  - 3: Iron pickaxe
-  - 4: Wood sword    - 5: Stone sword    - 6: Iron sword
+• sleep: Sleep to restore energy (action 6)
+• place_table: Place crafting table (action 8) - **ESSENTIAL FOR CRAFTING**
+• place_stone: Place stone block (action 7)
+• place_furnace: Place furnace (action 9)
+• place_plant: Plant sapling (action 10)
+• nearby means within 1 tile (8 surrounding grid cells)
+• CRAFT ACTIONS:
+  - craft_wood_pickaxe: Create wood pickaxe (requires 1 wood + table nearby)
+  - craft_stone_pickaxe: Create stone pickaxe (requires 1 wood + 1 stone + table nearby)
+  - craft_iron_pickaxe: Create iron pickaxe (requires 1 wood + 1 coal + 1 iron + table AND furnace nearby)
+  - craft_wood_sword: Create wood sword (requires 1 wood + table nearby)
+  - craft_stone_sword: Create stone sword (requires 1 wood + 1 stone + table nearby)
+  - craft_iron_sword: Create iron sword (requires 1 wood + 1 coal + 1 iron + table AND furnace nearby)
 
 **COORDINATE SYSTEM & MOVEMENT:**
 - Grid coordinates: (row, col) where (0,0) is top-left
@@ -203,28 +256,98 @@ Advanced: collect_iron, make_iron_pickaxe, make_iron_sword, collect_diamond
 Survival: sleep (wake_up), eat_plant, eat_cow, defeat_zombie, defeat_skeleton
 Building: place_stone, place_plant
 
-**OPTIMAL STRATEGY:**
-1. Early: Wood → Table → Wood Pickaxe → Stone/Coal
-2. Mid: Stone Pickaxe → Furnace → Iron → Iron Tools
-3. Combat: Craft swords → Fight creatures → Eat for health
-4. Survival: Monitor stats, sleep when energy <3, eat when health <5
+🎯 **ACHIEVEMENT PROGRESSION STRATEGY:**
 
-**DECISION FRAMEWORK:**
-1. **Survival First**: Energy <3 → TAB (sleep) | Health <5 → SPACE (eat plants/cows)
-2. **Resource Priority**: Wood → Stone/Coal → Iron → Diamond (tool progression)
-3. **Infrastructure**: Table before crafting | Furnace for iron tools
-4. **Combat**: Swords required for creatures | Fight for food/achievements
+**PHASE 1 - IMMEDIATE ACTIONS (Level 1 achievements):**
+- Start by collecting wood from trees (collect_wood)
+- Collect water when available (collect_drink)
+- Try to collect saplings from grass (collect_sapling) - 10% chance
+- Eat cows when you see them (eat_cow)
+- Sleep when energy < 9, then wake up (wake_up)
 
-**KEY CONTROLS REMINDER:**
-- Movement: WASD | Interact: SPACE | Sleep: TAB
-- Place: T(table), R(stone), F(furnace), P(plant)
-- Craft: 1-3(pickaxes), 4-6(swords)
+**PHASE 2 - INFRASTRUCTURE (Level 2 achievements):**
+- Once you have 2+ wood, place a crafting table (place_table)
+- If you have saplings, place plants on grass (place_plant)
+
+**PHASE 3 - BASIC TOOLS (Level 3 achievements):**
+- With table nearby, craft wood pickaxe (make_wood_pickaxe)
+- With table nearby, craft wood sword (make_wood_sword)
+- Eat plants when you see them (eat_plant)
+
+**PHASE 4 - INTERMEDIATE RESOURCES (Level 4 achievements):**
+- Use wood pickaxe to collect stone (collect_stone)
+- Use wood pickaxe to collect coal (collect_coal)
+
+**PHASE 5 - INTERMEDIATE TOOLS (Level 5 achievements):**
+- With stone and table nearby, craft stone pickaxe (make_stone_pickaxe)
+- With stone and table nearby, craft stone sword (make_stone_sword)
+- Place stone blocks when you have stone (place_stone)
+
+**PHASE 6 - ADVANCED RESOURCES (Level 6 achievements):**
+- With 4+ stone, place a furnace (place_furnace)
+- Use stone pickaxe to collect iron (collect_iron)
+
+**PHASE 7 - ADVANCED TOOLS (Level 7 achievements):**
+- With iron, coal, table AND furnace nearby, craft iron pickaxe (make_iron_pickaxe)
+- With iron, coal, table AND furnace nearby, craft iron sword (make_iron_sword)
+
+**PHASE 8 - MASTER RESOURCES (Level 8 achievements):**
+- Use iron pickaxe to collect diamond (collect_diamond)
+
+**COMBAT STRATEGY (Parallel to all phases):**
+- Fight zombies and skeletons when you have swords (defeat_zombie, defeat_skeleton)
+- Better swords deal more damage and make combat safer
+
+⚡ **DECISION FRAMEWORK - CHECK CONDITIONS IN THIS ORDER:**
+
+1. **SAFETY CHECK**:
+   - If facing lava → MOVE AWAY immediately (instant death)
+   - If energy < 3 → use 'sleep'
+   - If health < 5 → use 'interact' on cows/plants to eat
+
+2. **OBSTACLE DETECTION**:
+   - If facing obstacle (stone/tree/water/coal/iron/diamond/table/furnace) → cannot move in that direction
+   - If blocked by obstacle → either collect it (if possible) or find alternative path
+   - Plan movement using only walkable terrain (grass/path/sand)
+
+3. **IMMEDIATE COLLECTION OPPORTUNITIES**:
+   - If facing tree → use 'interact' (collect_wood)
+   - If facing water → use 'interact' (collect_drink)
+   - If facing cow → use 'interact' (eat_cow)
+   - If facing grass → use 'interact' (collect_sapling, 10% chance)
+   - If facing stone/coal/iron/diamond → use appropriate tool to collect
+
+4. **INFRASTRUCTURE OPPORTUNITIES**:
+   - If wood >= 2 and no table nearby and facing walkable terrain → use 'place_table'
+   - If sapling >= 1 and facing grass → use 'place_plant'
+   - If stone >= 4 and facing walkable terrain → use 'place_furnace'
+
+5. **CRAFTING OPPORTUNITIES**:
+   - If wood >= 1 and table nearby → use 'craft_wood_pickaxe'
+   - If wood >= 1 and table nearby → use 'craft_wood_sword'
+   - If wood >= 1 and stone >= 1 and table nearby → use 'craft_stone_pickaxe'
+   - If wood >= 1 and stone >= 1 and table nearby → use 'craft_stone_sword'
+   - If wood >= 1 and coal >= 1 and iron >= 1 and table nearby and furnace nearby → use 'craft_iron_pickaxe'
+   - If wood >= 1 and coal >= 1 and iron >= 1 and table nearby and furnace nearby → use 'craft_iron_sword'
+
+6. **COMBAT OPPORTUNITIES**:
+   - If sword >= 1 and facing zombie/skeleton → use 'interact' (defeat_zombie/defeat_skeleton)
+
+7. **STRATEGIC MOVEMENT**:
+   - If no immediate opportunities, move toward trees/resources/infrastructure
+   - Use only walkable terrain (grass/path/sand) for pathfinding
+   - Avoid obstacles unless collecting them
 
 **CRITICAL RULES:**
-- Check tool requirements before resource collection
-- Stay adjacent to infrastructure when crafting
-- Never fight without weapons
-- Monitor all vital stats continuously
+- **"Nearby" means within 1 tile (8 surrounding squares)** - you must be adjacent to table/furnace when crafting
+- **Check inventory before attempting actions** - ensure you have required materials
+- **Tool progression is mandatory** - cannot skip levels
+- **Sleep safely** - avoid sleeping near monsters (they deal 7 damage vs 2 when awake)
+- **Terrain matters** - tables/furnaces need grass/sand/path, plants need grass
+- **OBSTACLE AWARENESS** - cannot move through stone/tree/water/coal/iron/diamond/table/furnace
+- **PATHFINDING** - plan routes using only grass/path/sand terrain
+- **LAVA DANGER** - touching lava = instant death, move away immediately
+- **ONE OBJECT PER GRID** - each grid cell contains only one object/terrain type
 
-Analyze current state, identify missing achievements, select optimal keyboard action with clear reasoning.
+🎯 **CURRENT OBJECTIVE**: Analyze your current inventory, nearby objects, and available actions. Follow the decision framework above to select the highest priority achievable action based on your current resources and situation.
 """

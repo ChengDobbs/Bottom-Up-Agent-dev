@@ -860,8 +860,8 @@ class BottomUpAgent:
             # Enhance pre_knowledge with historical insights
             pre_knowledge = self.brain.enhance_pre_knowledge_with_history(base_pre_knowledge, task)
             
-            # Use MCP-style interaction for operation selection
-            mcp_result = self.brain.do_operation_mcp(
+            # Use streaming MCP-style interaction for operation selection (optimized token usage)
+            mcp_result = self.brain.do_operation_mcp_streaming(
                 step, task, obs[0], detected_objects, 
                 pre_knowledge
             )
@@ -1224,6 +1224,10 @@ class BottomUpAgent:
             reset_wait_time = getattr(self, 'reset_wait_time', 0.2)
             print(f"Performing universal reset operation, waiting {reset_wait_time}s...")
             time.sleep(reset_wait_time)
+            
+            # Clear hint context to prevent stale hints from affecting next steps
+            self.clear_current_hint()
+            print("Cleared current hint during reset")
             
             # Clear any application-specific state flags
             if hasattr(self, 'game_over_detected'):
