@@ -34,7 +34,7 @@ class Brain:
         # MCP-style interaction tools with dynamic configuration
         self.environment_query_tools = FunctionCalls.environment_query_tools(config['brain']['base_model'])
         # Initialize with full_mode by default, can be changed dynamically
-        self.mcp_interaction_tools = FunctionCalls.mcp_interaction_tools(config['brain']['base_model'], mode='full_mode')
+        self.mcp_interaction_tools = FunctionCalls.mcp_interaction_tools(config['brain']['base_model'], mode='full_mode', game_name=self.game_name)
         self.current_mcp_mode = 'full_mode'  # Track current mode
 
         self.uct_c = config['brain']['uct_c']
@@ -53,7 +53,7 @@ class Brain:
         """
         if mode != self.current_mcp_mode:
             self.logger.info(f"Switching MCP mode from '{self.current_mcp_mode}' to '{mode}'")
-            self.mcp_interaction_tools = FunctionCalls.mcp_interaction_tools(self.model_name, mode=mode)
+            self.mcp_interaction_tools = FunctionCalls.mcp_interaction_tools(self.model_name, mode=mode, game_name=self.game_name)
             self.current_mcp_mode = mode
             return True
         return False
@@ -717,11 +717,22 @@ class Brain:
             clear_directions = [dir for dir, status in movement_analysis.items() if status == "CLEAR"]
             
             if blocked_directions:
-                scene_data["movement_warnings"] = {
-                    "blocked_directions": blocked_directions,
-                    "clear_directions": clear_directions,
-                    "constraint": "Cannot place/craft when surrounded by obstacles - MOVE FIRST if all directions blocked"
-                }
+                # Only warn if completely surrounded (all 4 cardinal directions blocked)
+                cardinal_blocked = sum(1 for direction in ["up", "down", "left", "right"] 
+                                     if direction in blocked_directions)
+                
+                if cardinal_blocked >= 3:  # If 3+ cardinal directions blocked
+                    scene_data["movement_warnings"] = {
+                        "blocked_directions": blocked_directions,
+                        "clear_directions": clear_directions,
+                        "constraint": "Limited movement space - consider moving to open area for complex operations"
+                    }
+                elif cardinal_blocked >= 4:  # If completely surrounded
+                    scene_data["movement_warnings"] = {
+                        "blocked_directions": blocked_directions,
+                        "clear_directions": clear_directions,
+                        "constraint": "Completely surrounded - MUST move first before placing/crafting"
+                    }
             
             # Add decision hints based on current state and NEARBY objects (within 1 tile)
             if inventory and player_info:
@@ -1998,18 +2009,26 @@ class Brain:
             # Randomly select an object
             selected_obj = random.choice(clickable_objects)
             
-            # Randomly select an operation type
-            operations = ['Click', 'RightSingle', 'LeftDouble']
-            selected_operation = random.choice(operations)
-            
-            print(f"Random exploration: {selected_operation} on object {selected_obj.get('id', 'unknown')} at {selected_obj['center']}")
+            # Select operation type based on game
+            if self.game_name == "Crafter":
+                # For Crafter, use keyboard-only operations
+                operations = ['move_left', 'move_right', 'move_up', 'move_down', 'interact', 'sleep']
+                selected_operation = random.choice(operations)
+                operation_params = {}
+                print(f"Random exploration: {selected_operation} for Crafter")
+            else:
+                # For other games, use click operations
+                operations = ['Click', 'RightSingle', 'LeftDouble']
+                selected_operation = random.choice(operations)
+                operation_params = {"coordinate": selected_obj['center']}
+                print(f"Random exploration: {selected_operation} on object {selected_obj.get('id', 'unknown')} at {selected_obj['center']}")
             
             # Save conversation to history before returning (fallback case)
             final_decision = {
                 "action_type": "direct_operation",
                 "operate": selected_operation,
-                "params": {"coordinate": selected_obj['center']},
-                "object_id": selected_obj.get('id'),
+                "params": operation_params,
+                "object_id": selected_obj.get('id') if self.game_name != "Crafter" else None,
                 "fallback_decision": True
             }
             self._save_conversation_to_history(conversation_context, task, final_decision)
@@ -2017,21 +2036,30 @@ class Brain:
             return {
                 "action_type": "direct_operation",
                 "operate": selected_operation,
-                "params": {"coordinate": selected_obj['center']},
-                "object_id": selected_obj.get('id'),
+                "params": operation_params,
+                "object_id": selected_obj.get('id') if self.game_name != "Crafter" else None,
                 "conversation_context": conversation_context,
                 "fallback_decision": True,
-                "selected_object": selected_obj
+                "selected_object": selected_obj if self.game_name != "Crafter" else None
             }
         else:
             # Ultimate fallback if no objects detected
-            print("No objects detected, using center screen click as last resort")
+            if self.game_name == "Crafter":
+                # For Crafter, use safe movement operation
+                fallback_operation = "move_right"
+                fallback_params = {}
+                print("No objects detected, using movement as last resort for Crafter")
+            else:
+                # For other games, use center screen click
+                fallback_operation = "Click"
+                fallback_params = {"coordinate": [640, 360]}
+                print("No objects detected, using center screen click as last resort")
             
             # Save conversation to history before returning (ultimate fallback)
             final_decision = {
                 "action_type": "direct_operation",
-                "operate": "Click",
-                "params": {"coordinate": [640, 360]},
+                "operate": fallback_operation,
+                "params": fallback_params,
                 "object_id": None,
                 "fallback_decision": True
             }
@@ -2039,8 +2067,8 @@ class Brain:
             
             return {
                 "action_type": "direct_operation",
-                "operate": "Click",
-                "params": {"coordinate": [640, 360]},
+                "operate": fallback_operation,
+                "params": fallback_params,
                 "object_id": None,
                 "conversation_context": conversation_context,
                 "fallback_decision": True,
@@ -2430,12 +2458,21 @@ What do you want to do?"""
             }
         else:
             # Ultimate fallback if no objects detected
-            print("No objects detected, using center screen click as last resort")
+            if self.game_name == "Crafter":
+                # For Crafter, use safe movement operation
+                fallback_operation = "move_right"
+                fallback_params = {}
+                print("No objects detected, using movement as last resort for Crafter")
+            else:
+                # For other games, use center screen click
+                fallback_operation = "Click"
+                fallback_params = {"coordinate": [640, 360]}
+                print("No objects detected, using center screen click as last resort")
             
             final_decision = {
                 "action_type": "direct_operation",
-                "operate": "Click",
-                "params": {"coordinate": [640, 360]},
+                "operate": fallback_operation,
+                "params": fallback_params,
                 "object_id": None,
                 "fallback_decision": True
             }
@@ -2443,8 +2480,8 @@ What do you want to do?"""
             
             return {
                 "action_type": "direct_operation",
-                "operate": "Click",
-                "params": {"coordinate": [640, 360]},
+                "operate": fallback_operation,
+                "params": fallback_params,
                 "object_id": None,
                 "conversation_context": conversation_context,
                 "fallback_decision": True,

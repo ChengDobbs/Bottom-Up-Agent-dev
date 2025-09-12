@@ -245,9 +245,10 @@ mcp_tools:
     - "select_skill"       # Select the best skill from candidates
     - "refine_skill"       # Refine selected skill
   
-  # Operation execution tools  
+  # Operation execution tools (keyboard-only for Crafter)
   operation_tools:
-    - "keyboard"               # Type text input
+    - "movement"               # Movement operations (move_up, move_down, move_left, move_right)
+    - "interaction"            # Interaction operations (interact, sleep)
   
   # Crafter-specific tools (can be different for other games)
   game_specific_tools:
@@ -260,7 +261,7 @@ mcp_tools:
     enabled_tools: ["query_environment", "move_actions", "interact_actions"]
   
   skill_learning_mode:
-    enabled_tools: ["query_environment", "select_skill", "Type", "Finished"]
+    enabled_tools: ["query_environment", "select_skill", "movement", "interaction", "Finished"]
   
   full_mode:
     enabled_tools: "all"  # Use all available tools

@@ -187,7 +187,7 @@ def environment_query_tools(model_name):
         return None
 
 
-def mcp_interaction_tools(model_name, config_path=None, mode='full_mode'):
+def mcp_interaction_tools(model_name, config_path=None, mode='full_mode', game_name=None):
     """Combined tools for MCP-style structured interaction with configurable tool selection"""
     # Load MCP tools configuration
     mcp_config = load_mcp_tools_config(config_path)
@@ -208,23 +208,27 @@ def mcp_interaction_tools(model_name, config_path=None, mode='full_mode'):
         if skill_tools:
             all_tools.extend(skill_tools)
     
-    # Add operation tools if enabled
+    # Add operation tools if enabled - but exclude click operations for Crafter
     if not enabled_tools or any(tool in enabled_tools for tool in ['Click', 'RightSingle', 'LeftDouble', 'Type', 'Drag', 'Finished', 'Scroll']):
-        operation_tools = do_operation_tools(model_name)
-        if operation_tools:
-            all_tools.extend(operation_tools)
+        # For Crafter, skip click-based operation tools
+        if game_name != "Crafter":
+            operation_tools = do_operation_tools(model_name)
+            if operation_tools:
+                all_tools.extend(operation_tools)
+        else:
+            print(f"🎯 Skipping click-based operation tools for Crafter game")
     
     # Add keyboard action tools if enabled
-    if not enabled_tools or any(tool in enabled_tools for tool in ['move_actions', 'craft_actions', 'interact_actions']):
+    if not enabled_tools or any(tool in enabled_tools for tool in ['move_actions', 'craft_actions', 'interact_actions', 'movement', 'interaction']):
         keyboard_tools = keyboard_action_tools(model_name)
         if keyboard_tools:
             all_tools.extend(keyboard_tools)
     
     # Log which tools are being used
     if mcp_config and enabled_tools:
-        print(f"MCP Tools loaded for mode '{mode}': {enabled_tools}")
+        print(f"MCP Tools loaded for mode '{mode}' (game: {game_name}): {enabled_tools}")
     else:
-        print(f"MCP Tools: Using default full tool set (no config found or full_mode)")
+        print(f"MCP Tools: Using default full tool set (no config found or full_mode) for game: {game_name}")
     
     return all_tools if all_tools else None
 

@@ -627,9 +627,9 @@ class GridContentChecker:
         surroundings = {}
         if player_grid_pos:
             directions = {
-                (-1, -1): "northwest", (-1, 0): "north", (-1, 1): "northeast",
-                (0, -1): "west", (0, 1): "east",
-                (1, -1): "southwest", (1, 0): "south", (1, 1): "southeast"
+                (-1, -1): "up_left", (-1, 0): "up", (-1, 1): "up_right",
+                (0, -1): "left", (0, 1): "right",
+                (1, -1): "down_left", (1, 0): "down", (1, 1): "down_right"
             }
             
             for (dr, dc), direction in directions.items():
@@ -674,7 +674,7 @@ class GridContentChecker:
         
         # Generate facing direction text
         facing_text = {
-            (-1, 0): "west", (1, 0): "east", (0, -1): "north", (0, 1): "south"
+            (-1, 0): "left", (1, 0): "right", (0, -1): "up", (0, 1): "down"
         }.get(tuple(convert_numpy_types(player_facing)), "unknown")
         
         # Create concise scene summary with coordinates
@@ -729,10 +729,10 @@ class GridContentChecker:
         
         # Player status
         facing_text = {
-            (-1, 0): "west",
-            (1, 0): "east",
-            (0, -1): "north",
-            (0, 1): "south"
+            (-1, 0): "left",
+            (1, 0): "right",
+            (0, -1): "up",
+            (0, 1): "down"
         }.get(tuple(player_facing), "unknown direction")
         
         context_parts.append(f"Player is at world position {player_pos}, facing {facing_text}.")

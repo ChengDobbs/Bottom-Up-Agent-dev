@@ -1082,9 +1082,9 @@ class GymBottomUpAgent(BottomUpAgent):
             # Get immediate surroundings (only non-empty cells)
             surroundings = {}
             directions = {
-                (-1, -1): "northwest", (-1, 0): "north", (-1, 1): "northeast",
-                (0, -1): "west", (0, 1): "east",
-                (1, -1): "southwest", (1, 0): "south", (1, 1): "southeast"
+                (-1, -1): "up_left", (-1, 0): "up", (-1, 1): "up_right",
+                (0, -1): "left", (0, 1): "right",
+                (1, -1): "down_left", (1, 0): "down", (1, 1): "down_right"
             }
             
             for (dr, dc), direction in directions.items():
@@ -1114,7 +1114,7 @@ class GymBottomUpAgent(BottomUpAgent):
             
             # Generate facing direction text
             facing_text = {
-                (-1, 0): "west", (1, 0): "east", (0, -1): "north", (0, 1): "south"
+                (-1, 0): "left", (1, 0): "right", (0, -1): "up", (0, 1): "down"
             }.get(tuple(convert_numpy_types(player_facing)), "unknown")
             
             # Generate compact context
@@ -1180,19 +1180,27 @@ class GymBottomUpAgent(BottomUpAgent):
             obj_name = obj.get('name', 'unknown')
             obj_type = obj.get('type', 'interactive')
             
-            # Create basic interaction skill
+            # Create basic interaction skill - use appropriate operation based on game
+            if self.config.get('game_name') == "Crafter":
+                # For Crafter, use interact operation instead of click
+                operation = {
+                    'operate': 'interact',
+                    'params': {}
+                }
+            else:
+                # For other games, use click operation
+                operation = {
+                    'operate': 'click',
+                    'object_id': obj.get('id'),
+                    'coordinate': [obj.get('x', 0), obj.get('y', 0)],
+                    'params': {'button': 'left'}
+                }
+                
             auto_skill = {
                 'id': f"auto_{obj_name}_{int(time.time())}",
                 'name': f"Auto_{obj_name}_Interaction",
                 'description': f"Automatically interact with {obj_name}",
-                'operations': [
-                    {
-                        'operate': 'click',
-                        'object_id': obj.get('id'),
-                        'coordinate': [obj.get('x', 0), obj.get('y', 0)],
-                        'params': {'button': 'left'}
-                    }
-                ],
+                'operations': [operation],
                 'fitness': 1.0,
                 'num': 1,
                 'mcts_node_id': None,
@@ -1208,20 +1216,36 @@ class GymBottomUpAgent(BottomUpAgent):
         """Generate an exploration skill based on current scene complexity"""
         try:
             # Create exploration skill that moves around to discover more
+            if self.config.get('game_name') == "Crafter":
+                # For Crafter, use proper movement operations
+                operations = [
+                    {
+                        'operate': 'move_up',
+                        'params': {}
+                    },
+                    {
+                        'operate': 'move_right',
+                        'params': {}
+                    }
+                ]
+            else:
+                # For other games, use key press operations
+                operations = [
+                    {
+                        'operate': 'key_press',
+                        'params': {'key': 'w'}  # Move forward/up
+                    },
+                    {
+                        'operate': 'key_press',
+                        'params': {'key': 'd'}  # Move right
+                    }
+                ]
+                
             auto_skill = {
                 'id': f"auto_explore_{int(time.time())}",
                 'name': "Auto_Scene_Exploration",
                 'description': f"Explore scene with {len(detected_objects)} objects",
-                'operations': [
-                    {
-                        'operate': 'key_press',
-                        'params': {'key': 'w'},  # Move forward/up
-                    },
-                    {
-                        'operate': 'key_press', 
-                        'params': {'key': 'd'},  # Move right
-                    }
-                ],
+                'operations': operations,
                 'fitness': 0.8,
                 'num': 1,
                 'mcts_node_id': None,

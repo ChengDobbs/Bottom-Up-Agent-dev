@@ -44,7 +44,13 @@ class BottomUpAgent:
         self.close_evaluate = config['close_evaluate'] if 'close_evaluate' in config else False
         self.close_reset = config['close_reset'] if 'close_reset' in config else True
 
-        self.operates = config['operates'] if 'operates' in config else ['Click']
+        # Set default operations based on game type
+        if self.game_name == "Crafter":
+            default_operates = ['move_left', 'move_right', 'move_up', 'move_down', 'interact', 'sleep']
+        else:
+            default_operates = ['Click']
+        
+        self.operates = config['operates'] if 'operates' in config else default_operates
         self.max_operation_length = config['max_operation_length'] if 'max_operation_length' in config else 2
         self.is_base = config['is_base'] if 'is_base' in config else False
         self.use_mcp = config['use_mcp'] if 'use_mcp' in config else False
@@ -120,6 +126,15 @@ class BottomUpAgent:
     def get_potential_operations(self, existed_objects):
         # use for train action
         operations = []
+        
+        # For Crafter, use keyboard-only operations
+        if self.game_name == "Crafter":
+            crafter_operations = ['move_left', 'move_right', 'move_up', 'move_down', 'interact', 'sleep']
+            for operate in crafter_operations:
+                operations.append({'operate': operate, 'params': {}})
+            return operations
+        
+        # For other games, use configured operations
         for operate in self.operates:
             if operate == 'Click':
                 for object in existed_objects:
