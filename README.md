@@ -149,14 +149,15 @@ python -m demos.crafter_interactive_launcher --max-steps 1_000_000
 ## Run on Games
 ### Slay the Spire
 ```bash
-python -m run --config_file "config/sts_explore_claude.yaml"
-python -m run --config_file "config/sts_omni_claude.yaml"
-python -m run --config_file "config/sts_vector_mcp_claude.yaml"
+python -m run --config config/sts/sts_explore_claude.yaml
+python -m run --config config/sts/sts_omni_claude.yaml
+python -m run --config config/sts/sts_vector_mcp_claude.yaml
 ```
+
 
 ### Civilization V
 ```bash
-python -m run --config_file "config/c5_explore_claude.yaml"
+python -m run --config config/civ5/c5_explore_claude.yaml
 ```
 
 ## Control

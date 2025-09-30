@@ -1,0 +1,53 @@
+project_name: 'SuperGamer'
+game_name: 'Slay the Spire'
+run_name: 'claude - omni - test - 2509261201'
+close_explore: False
+close_reflexion: False
+close_reset: False
+is_base: False
+use_mcp: False
+
+result_path: 'results'
+
+teacher_type: 'Random' # Human or AI or Random
+
+brain:
+  base_model: 'claude-sonnet-4-20250514' # gpt-4o or claude family model
+  evaluate_model: 'gpt-4o'
+
+  uct_c: 5.0
+  uct_threshold: 0.0
+
+detector:
+  type: 'omni'  # 'sam' or 'omni'
+  # config for sam
+  # sam:
+  #   sam_weights: 'weights/sam_vit_b_01ec64.pth'
+  #   sam_type: 'vit_b'
+  # config for omni
+  omni:
+    som_model_path: 'weights/icon_detect/model.pt'
+    caption_model_name: 'florence2'
+    caption_model_path: 'weights/icon_caption_florence'
+    BOX_TRESHOLD: 0.35
+    iou_threshold: 0.4
+    text_overlap_threshold: 0.25
+  # general
+  clip_model: 'ViT-B/32' # ViT-B/32, ViT-B/16, ViT-L/14, RN50
+
+vector_memory:
+  similarity_threshold: 0.92  # Object similarity threshold for deduplication
+  embedding_type: "open_clip"  # Use default embedding to avoid conflicts
+  clip_model: "ViT-B/32"     # CLIP model version
+  vector_dim: 512            # Vector dimension
+  batch_size: 32             # Batch size
+  image_preprocessing:
+    target_size: [224, 224]   # Target image size
+    normalize: true           # Whether to normalize
+
+eye:
+  width: 1280
+  height: 720
+
+long_memory:
+  sim_threshold: 0.9

@@ -1,28 +1,30 @@
 project_name: 'SuperGamer'
 game_name: 'Slay the Spire'
-run_name: 'gpt-4o - run2'
-close_explore: True
+run_name: 'claude - sam - test25091614'
+close_explore: False
 close_reflexion: False
-close_reset: True
-is_base: True
+close_reset: False
+is_base: False
 
 result_path: 'results'
 
 teacher_type: 'Random' # Human or AI or Random
 
 brain:
-  base_model: 'gpt-4o' # gpt-4o or claude-3-7-sonnet-20250219 
+  base_model: 'claude-sonnet-4-20250514' # gpt-4o or claude family model
   evaluate_model: 'gpt-4o'
 
-  uct_c: 2.0
+  uct_c: 5.0
   uct_threshold: 0.0
 
-
 detector:
-  sam_weights: 'weights/sam_vit_b_01ec64.pth'  # sam_vit_b_01ec64 or sam_vit_b_4b8939
-  sam_type: 'vit_b'     # vit_h or vit_b
+  type: 'sam'  # 'sam' or 'omni'
+  # config for sam
+  sam:
+    sam_weights: 'weights/sam_vit_b_01ec64.pth'
+    sam_type: 'vit_b'
+  # general
   clip_model: 'ViT-B/32' # ViT-B/32, ViT-B/16, ViT-L/14, RN50
-
 eye:
   width: 1280
   height: 720

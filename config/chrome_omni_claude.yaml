@@ -1,6 +1,6 @@
-project_name: 'SuperGamer'
-game_name: 'Slay the Spire'
-run_name: 'claude - omni - test1'
+project_name: 'BottomUp'
+game_name: 'Chrome'
+run_name: 'chrome.claude.omni - test - any_action'
 close_explore: False
 close_reflexion: False
 close_reset: False
@@ -35,7 +35,7 @@ detector:
   clip_model: 'ViT-B/32' # ViT-B/32, ViT-B/16, ViT-L/14, RN50
 
 eye:
-  width: 1280
+  width: 1080
   height: 720
 
 long_memory:

@@ -8,6 +8,7 @@ test/
 *.db
 *.sqlite3
 *bin
+*.csv
 weights/
 base_model/.env
 wandb/

@@ -9,20 +9,55 @@ import argparse
 import sys
 from pathlib import Path
 from BottomUpAgent.BottomUpAgent import BottomUpAgent
-from BottomUpAgent.GymAgent import GymBottomUpAgent
+from BottomUpAgent.Eye import Eye
+
+def check_window_exists(config):
+    """Check if the game window exists before initializing the agent"""
+    try:
+        # Create a temporary Eye instance to check window
+        temp_eye = Eye(config)
+        window_name = config['game_name']
+        
+        # Try to find the window
+        if temp_eye.platform == 'windows':
+            window_info = temp_eye._find_window_windows(window_name)
+        elif temp_eye.platform == 'linux':
+            window_info = temp_eye._find_window_linux(window_name)
+        else:
+            print(f"Unsupported platform: {temp_eye.platform}")
+            return False
+            
+        if not window_info:
+            print(f"❌ Window '{window_name}' not found on {temp_eye.platform}, please launch the game before starting the run.")
+            return False
+            
+        print(f"✅ Window '{window_name}' found, proceeding with agent initialization.")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error checking window: {e}")
+        return False
 
 
-def main(config, mode='demo', interactive=False, episodes=1, max_steps=1000, resolution='medium', analysis_interval=5, no_gui=False):
+def main(config, mode='demo', episodes=1, max_steps=1000, resolution='medium', analysis_interval=5, no_gui=False):
     """Main entry point for running Bottom-Up Agent"""
     
     # Check if this is a Gym environment configuration
     is_gym_env = (
         'gym' in config or 
-        config.get('game_name') in ['Crafter', 'CrafterReward-v1', 'CartPole-v1'] or
+        config.get('game_name') in ['Crafter', 'CrafterReward-v1'] or
         'gym_environment' in config
     )
     
     if is_gym_env:
+        # Import GymBottomUpAgent only when needed (includes pygame dependencies)
+        try:
+            from BottomUpAgent.GymAgent import GymBottomUpAgent
+        except ImportError as e:
+            print(f"❌ Failed to import GymBottomUpAgent: {e}")
+            print("💡 Make sure pygame and gym dependencies are installed for gym environments")
+            sys.exit(1)
+            
         # Check if simple mode is requested (to avoid initialization issues)
         simple_mode = config.get('simple_mode', False)
         if simple_mode:
@@ -77,6 +112,12 @@ def main(config, mode='demo', interactive=False, episodes=1, max_steps=1000, res
             agent.close()
     else:
         print(f"🤖 Creating standard BottomUpAgent for {config.get('game_name', 'Unknown')}")
+        
+        # Check if window exists before creating agent
+        if not check_window_exists(config):
+            print("❌ Cannot proceed without game window. Please launch the game first.")
+            sys.exit(1)
+            
         agent = BottomUpAgent(config)
         task = config.get('task', 'Play the game')
         
@@ -92,10 +133,8 @@ def main(config, mode='demo', interactive=False, episodes=1, max_steps=1000, res
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Universal Bottom-Up Agent Runner')
     
-    # Config file argument (support both --config and --config_file for backward compatibility)
-    config_group = parser.add_mutually_exclusive_group(required=True)
-    config_group.add_argument('--config', help='Path to config file')
-    config_group.add_argument('--config_file', help='Path to config file (deprecated, use --config)')
+    # Config file argument
+    parser.add_argument('--config', required=True, help='Path to config file')
     
     # Mode selection
     parser.add_argument('--mode', 
@@ -106,7 +145,6 @@ if __name__ == "__main__":
     # General options
     parser.add_argument('--episodes', type=int, default=1, help='Number of episodes to run')
     parser.add_argument('--max_steps', type=int, default=1000, help='Maximum steps per episode')
-    parser.add_argument('--interactive', action='store_true', help='Run in interactive mode (deprecated, use --mode interactive)')
     
     # Crafter-specific options
     parser.add_argument('--resolution', default='medium', 
@@ -117,14 +155,14 @@ if __name__ == "__main__":
                        help='Run without GUI (background mode)')
     
     args = parser.parse_args()
-    
-    # Determine config file path
-    config_path = args.config or args.config_file
+    config_path = args.config
     
     # Load configuration
     try:
         with open(config_path, "r", encoding='utf-8') as f:
             config = yaml.safe_load(f)
+        # Store the config file path for use by Brain class
+        config['_config_path'] = config_path
         print(f"✅ Configuration loaded from {config_path}")
     except Exception as e:
         print(f"❌ Error loading config file {config_path}: {e}")
@@ -135,16 +173,10 @@ if __name__ == "__main__":
         args.mode = config['mode']
         print(f"📋 Using mode from config: {args.mode}")
     
-    # Handle deprecated --interactive flag
-    if args.interactive and args.mode == 'demo':
-        args.mode = 'interactive'
-        print("⚠️ --interactive flag is deprecated, use --mode interactive instead")
-    
     # Run the agent
     main(
         config=config,
         mode=args.mode,
-        interactive=args.interactive,
         episodes=args.episodes,
         max_steps=args.max_steps,
         resolution=args.resolution,

@@ -16,7 +16,15 @@ close_reset: False
 is_base: False
 use_mcp: True
 mcp:
-  max_iter: 6  # More iterations for complex environment
+  max_iter: 2  # More iterations for complex environment
+  max_history_length: 1
+
+# MCP Efficiency Monitoring
+enable_mcp_monitoring: True  # Enable MCP efficiency monitoring
+
+# MCP Debug CSV Logging
+enable_mcp_debug_csv: True  # Enable MCP debug CSV logging for detailed analysis
+mcp_debug_csv_path: 'data/mcp_debug'  # Path to save MCP debug CSV files
 
 result_path: 'results'
 exec_duration: 2.0  # Longer wait time for complex decisions
@@ -195,15 +203,7 @@ detector:
     enable_semantic_view: true  # Include all world objects in detection
     
     # Detection method selection
-    detection_method: 'direct_api'  # Options: 'similarity_matching', 'direct_api', 'hybrid'
-    
-    # Similarity matching configuration
-    similarity_matching:
-      enabled: false                    # Disable similarity matching to avoid CLIP
-      template_source: 'crafter_assets'  # Use crafter asset templates
-      similarity_threshold: 0.8  # Minimum similarity score (0.0-1.0)
-      use_color_analysis: true   # Enable RGB color analysis as fallback
-      cache_templates: true      # Cache loaded templates for performance
+    detection_method: 'direct_api'  # Options: 'direct_api'
       
     # Direct API configuration  
     direct_api:
@@ -211,7 +211,6 @@ detector:
       use_world_state: true      # Access world._world for material info
       use_player_state: true     # Access player inventory and position
       include_objects: true      # Include dynamic objects (creatures, items)
-      fallback_to_similarity: false     # Disable fallback to avoid CLIP
 
 # Database path configuration
 database:
@@ -256,14 +255,8 @@ mcp_tools:
     - "craft_actions"       # Crafting actions (make tools, place items)
     - "interact_actions"    # Interaction actions (do, sleep)
     
-  # Tool availability by mode
-  exploration_mode:
-    enabled_tools: ["query_environment", "move_actions", "interact_actions"]
-  
-  skill_learning_mode:
-    enabled_tools: ["query_environment", "select_skill", "movement", "interaction", "Finished"]
-  
-  full_mode:
+  # Default mode (always uses all tools)
+  default_mode:
     enabled_tools: "all"  # Use all available tools
 
 # Automatic gameplay configuration
@@ -304,7 +297,7 @@ automatic_gameplay:
     
     context_history_size: 10       # Number of recent scenes to keep
     new_object_threshold: 1        # Minimum new objects to trigger skill generation
-    exploration_skill_threshold: 5 # Object count to trigger exploration skills
+    exploration_trigger_objects: 1 # Object count to trigger exploration skills (lowered to encourage exploration)
 
 # Experimental features
 experimental:
