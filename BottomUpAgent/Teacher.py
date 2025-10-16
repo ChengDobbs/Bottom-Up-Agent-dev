@@ -9,10 +9,9 @@ class Teacher():
         if self.type == 'Human':
             return self.get_operation_guidance_human(candidate_operations)
         elif self.type == 'AI':
-            print("AI operation guidance not implemented")
-            return None
+            return self.get_operation_guidance_ai(candidate_operations)
         elif self.type == 'Random':
-            return random.choice(candidate_operations)
+            return self.get_operation_guidance_random(candidate_operations)
         else:
             print(f"Unsupported type: {self.type}")
             return None
@@ -46,6 +45,10 @@ class Teacher():
                 print(f"Error: {e}")
                 return None
 
-
+    def get_operation_guidance_ai(self, candidate_operations):
+        print("\n[AI Operation Guidance]")
+        print(f"AI will select an operation randomly: {candidate_operations}")
+        return random.choice(candidate_operations)
     
-
+    def get_operation_guidance_random(self, candidate_operations):
+        return random.choice(candidate_operations)

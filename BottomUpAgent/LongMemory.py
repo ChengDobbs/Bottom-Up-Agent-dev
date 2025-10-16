@@ -53,7 +53,7 @@ class LongMemory:
 
         cursor.execute("CREATE TABLE IF NOT EXISTS objects (id INTEGER PRIMARY KEY, content TEXT , image BLOB, hash BLOB, area INTEGER, bbox TEXT, center TEXT, history_centers TEXT, vector_id TEXT, linked_skill_id INTEGER, is_click_change INTEGER DEFAULT 0, is_hover_change INTEGER DEFAULT 0, hover_tooltip TEXT)")
 
-        cursor.execute("CREATE TABLE IF NOT EXISTS skills (id INTEGER PRIMARY KEY, name TEXT, description TEXT, operations TEXT, " \
+        cursor.execute("CREATE TABLE IF NOT EXISTS skills (id INTEGER PRIMARY KEY, name TEXT, description TEXT, operations TEXT, skill_type INTEGER DEFAULT 0, " \
         "fitness REAL, num INTEGER, state_id INTEGER, mcts_node_id INTEGER, image1 BLOB, image2 BLOB)")
 
         cursor.execute("CREATE TABLE IF NOT EXISTS skill_clusters (id INTEGER PRIMARY KEY, state_feature BLOB, name TEXT, description TEXT, members TEXT, explore_nums INTEGER)")
@@ -459,7 +459,7 @@ class LongMemory:
 
     """   skills   """
     
-    def save_skill(self, name, description, operations, fitness, num, state_id, mcts_node_id, image1, image2):
+    def save_skill(self, name, description, operations, fitness, num, state_id, mcts_node_id, image1, image2, skill_type=0):
         _, image1_blob = cv2.imencode('.png', image1)
         image1_blob = image1_blob.tobytes()
         _, image2_blob = cv2.imencode('.png', image2)
@@ -467,8 +467,8 @@ class LongMemory:
 
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO skills (name, description, operations, fitness, num, state_id, mcts_node_id, image1, image2) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", \
-                       (name, description, json.dumps(operations), fitness, num, state_id, mcts_node_id, image1_blob, image2_blob))
+        cursor.execute("INSERT INTO skills (name, description, operations, skill_type, fitness, num, state_id, mcts_node_id, image1, image2) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", \
+                       (name, description, json.dumps(operations), skill_type, fitness, num, state_id, mcts_node_id, image1_blob, image2_blob))
         conn.commit()
 
         skill_id = cursor.lastrowid
@@ -506,13 +506,38 @@ class LongMemory:
         cursor = conn.cursor()
         cursor.execute("UPDATE skills SET fitness = ?, num = ? WHERE id = ?", (fitness, num, id))
         conn.commit()
+    
+    def update_skill_type(self, skill_id, skill_type):
+        """Update skill type for a specific skill"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE skills SET skill_type = ? WHERE id = ?", (skill_type, skill_id))
+        type_str = 'PROGRESS_CONTRIBUTING' if skill_type == 0 else 'NAVIGATION_ONLY' if skill_type == 1 else 'INCOMPLETE'
+        conn.commit()
+        print(f"Updated skill {skill_id} type to: [{type_str}]")
+    
+    def update_skill_with_type(self, skill_id, fitness, num, skill_type=None):
+        """Update skill fitness, num, and optionally skill_type"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        if skill_type is not None:
+            cursor.execute("UPDATE skills SET fitness = ?, num = ?, skill_type = ? WHERE id = ?", 
+                          (fitness, num, skill_type, skill_id))
+            print(f"Updated skill {skill_id}: fitness={fitness}, num={num}, skill_type={skill_type}")
+        else:
+            cursor.execute("UPDATE skills SET fitness = ?, num = ? WHERE id = ?", 
+                          (fitness, num, skill_id))
+            print(f"Updated skill {skill_id}: fitness={fitness}, num={num}")
+        
+        conn.commit()
 
     
     def get_skills_by_ids(self, ids):
         skills = []
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT id, name, description, operations, fitness, num, state_id, mcts_node_id FROM skills WHERE id IN ({})'.format(','.join('?'*len(ids))), ids)
+        cursor.execute('SELECT id, name, description, operations, skill_type , fitness, num, state_id, mcts_node_id FROM skills WHERE id IN ({})'.format(','.join('?'*len(ids))), ids)
         records = cursor.fetchall()
 
         for record in records:
@@ -521,10 +546,11 @@ class LongMemory:
                 "name": record[1],
                 "description": record[2],
                 "operations": json.loads(record[3]),
-                "fitness": record[4],
-                "num": record[5],
-                "state_id": record[6],
-                "mcts_node_id": record[7]
+                "skill_type": record[4],
+                "fitness": record[5],
+                "num": record[6],
+                "state_id": record[7],
+                "mcts_node_id": record[8]
             }
             skills.append(skill)
 
@@ -550,7 +576,7 @@ class LongMemory:
     def get_skills(self):
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT id, name, description, operations, fitness, num, state_id, mcts_node_id FROM skills')
+        cursor.execute('SELECT id, name, description, operations, skill_type, fitness, num, state_id, mcts_node_id FROM skills')
         records = cursor.fetchall()
 
         skills = []
@@ -560,10 +586,11 @@ class LongMemory:
                 "name": record[1],
                 "description": record[2],
                 "operations": json.loads(record[3]),
-                "fitness": record[4],
-                "num": record[5],
-                "state_id": record[6],
-                "mcts_node_id": record[7]
+                "skill_type": record[4],
+                "fitness": record[5],
+                "num": record[6],
+                "state_id": record[7],
+                "mcts_node_id": record[8]
             }
             skills.append(skill)
 
@@ -760,6 +787,53 @@ class LongMemory:
                 "hover_tooltip": hover_tooltip,
                 "bbox": bbox,
                 "center": center
+            })
+        
+        return objects
+    
+    def get_object_hover_status(self, object_id: int):
+        """Get hover status of a specific object"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT is_hover_change, hover_tooltip FROM objects WHERE id = ?', (object_id,))
+        record = cursor.fetchone()
+        
+        if record is None:
+            return None, None
+        
+        is_hover_change, hover_tooltip = record
+        return bool(is_hover_change) if is_hover_change is not None else False, hover_tooltip
+    
+    def get_objects_needing_hover_test(self, object_ids: list):
+        """Get objects that need hover testing (new objects or objects with is_hover_change=0 and hover_tooltip=None)"""
+        if not object_ids:
+            return []
+            
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        # Create placeholders for the IN clause
+        placeholders = ','.join('?' * len(object_ids))
+        cursor.execute(f'''
+            SELECT id, content, bbox, center, is_hover_change, hover_tooltip 
+            FROM objects 
+            WHERE id IN ({placeholders}) 
+            AND (is_hover_change = 0 OR is_hover_change IS NULL OR hover_tooltip IS NULL)
+        ''', object_ids)
+        
+        records = cursor.fetchall()
+        objects = []
+        for record in records:
+            id, content, bbox_str, center_str, is_hover_change, hover_tooltip = record
+            bbox = json.loads(bbox_str)
+            center = json.loads(center_str)
+            objects.append({
+                "id": id,
+                "content": content,
+                "bbox": bbox,
+                "center": center,
+                "is_hover_change": bool(is_hover_change) if is_hover_change is not None else False,
+                "hover_tooltip": hover_tooltip
             })
         
         return objects

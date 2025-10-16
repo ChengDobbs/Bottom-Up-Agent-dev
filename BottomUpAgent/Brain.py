@@ -346,9 +346,10 @@ class Brain:
         
         if response['function'] is not None:
             if response['function']['name'] == "save_skill":
+                # New skills start with default skill_type=0 (PROGRESS_CONTRIBUTING)
                 id = self.long_memory.save_skill(response['function']['input']['name'], response['function']['input']['description'], 
-                                            operations_to_save, 0, 1, state_id, mcst_node_id, obs[0]['screen'], obs[-1]['screen'])
-                print(f"save skill: {response['function']['input']['name']}, operations: {operations_str}, fitness: {0}")
+                                            operations_to_save, 0, 1, state_id, mcst_node_id, obs[0]['screen'], obs[-1]['screen'], skill_type=0)
+                print(f"save skill: {response['function']['input']['name']}, operations: {operations_str}, fitness: {0}, skill_type: PROGRESS_CONTRIBUTING")
                 return {"id": id, "name": response['function']['input']['name'], "description": response['function']['input']['description']}
             elif response['function']['name'] == "incomplete_skill":
                 # Handle incomplete skill - save as temporary skill and signal for MCP continuation
@@ -368,7 +369,7 @@ class Brain:
                     response['function']['input']['name'], 
                     response['function']['input']['description'], 
                     operations_to_save, -1, 0, state_id, mcst_node_id, 
-                    obs[0]['screen'], obs[-1]['screen']
+                    obs[0]['screen'], obs[-1]['screen'], skill_type=1
                 )
                 
                 return {

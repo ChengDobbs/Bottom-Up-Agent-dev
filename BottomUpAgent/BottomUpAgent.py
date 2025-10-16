@@ -275,27 +275,32 @@ class BottomUpAgent:
         return operations
     
     def explore_hover_effects(self, existed_objects, state, hover_threshold):
-        """
-        Test hover effects on all detected objects.
-        Always re-test to handle object replacements/updates.
-        Does NOT create skill nodes.
-        """
         import random
         
         print(f"\n[HOVER] Starting hover exploration")
         
-        # Filter valid objects (all objects with ID, no filtering by is_hover_change)
+        # Filter valid objects
         valid_objects = [obj for obj in existed_objects if obj.get('id') is not None]
         
         if not valid_objects:
             print("[HOVER] No valid objects to explore")
             return {'explored': 0, 'hoverable': 0}
         
-        # Shuffle all objects for random order testing
-        sample_size = len(valid_objects)
-        shuffled_objects = random.sample(valid_objects, sample_size)
+        # Get object IDs for database query
+        object_ids = [obj['id'] for obj in valid_objects]
         
-        print(f"[HOVER] Will test {sample_size} objects")
+        # Get objects that need hover testing (new objects or objects with is_hover_change=0 and hover_tooltip=None)
+        objects_needing_test = self.brain.long_memory.get_objects_needing_hover_test(object_ids)
+        
+        if not objects_needing_test:
+            print("[HOVER] All objects have been tested before, skipping hover exploration")
+            return {'explored': 0, 'hoverable': 0}
+        
+        # Shuffle objects that need testing for random order
+        sample_size = len(objects_needing_test)
+        shuffled_objects = random.sample(objects_needing_test, sample_size)
+        
+        print(f"[HOVER] Found {len(valid_objects)} total objects, {sample_size} need hover testing")
         
         hoverable_count = 0
         for i, obj in enumerate(shuffled_objects, 1):
@@ -311,7 +316,7 @@ class BottomUpAgent:
             except Exception as e:
                 print(f"[HOVER] {i}/{sample_size} Object {object_id}: Error - {e}")
         
-        print(f"[HOVER] Complete: {hoverable_count}/{sample_size} hoverable\n")
+        print(f"[HOVER] Complete: {hoverable_count}/{sample_size} hoverable objects tested\n")
         return {'explored': sample_size, 'hoverable': hoverable_count}
     
     def regional_hover_detect(self, obj, state, hover_threshold):
@@ -338,7 +343,7 @@ class BottomUpAgent:
         # Calculate 1/3 screen region around hover position
         screen_h, screen_w = screen_before.shape[:2]
         region_w = screen_w // 3
-        region_h = screen_h // 3
+        region_h = screen_h // 2
         x1 = max(0, x - region_w // 2)
         y1 = max(0, y - region_h // 2)
         x2 = min(screen_w, x1 + region_w)
@@ -1159,8 +1164,15 @@ class BottomUpAgent:
                 skill['fitness'] = skill_fitness
                 skill['num'] = num
 
-                self.brain.long_memory.update_skill(skill['id'], skill_fitness, num)
-
+                # Determine skill type based on is_consistent and is_progressive
+                if is_progressive:
+                    skill_type = 0  # PROGRESS_CONTRIBUTING
+                else:
+                    skill_type = 1  # NAVIGATION_ONLY
+                
+                # Update skill with fitness, num, and skill_type in one call
+                self.brain.long_memory.update_skill_with_type(skill['id'], skill_fitness, num, skill_type)
+                
                 if is_consistent and is_progressive:
                     result = 'Continue'
                 else:
