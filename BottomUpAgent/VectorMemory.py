@@ -15,69 +15,39 @@ from chromadb.utils.embedding_functions import known_embedding_functions
 from chromadb import Documents, EmbeddingFunction, Embeddings
 
 class VectorMemory:
-    """
-    基于Chroma向量数据库的对象存储和检索系统
-    支持图像向量化、相似度匹配和智能去重
-    """
-    
     def __init__(self, config):
-        # 日志配置 - 首先初始化
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
         
         self.game_name = config['game_name']
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        
-        # 初始化CLIP模型用于图像编码
         self.clip_model, self.clip_preprocess = clip.load("ViT-B/32", device=self.device)
-        
-        # 向量数据库配置 - 标准化路径
         game_name_normalized = self.game_name.lower().replace(" ", "_")
         self.vector_db_path = os.path.join(config.get('database', {}).get('vector_db_path', os.path.join('data', 'vector')), game_name_normalized)
 
         self.similarity_threshold = config.get('vector_memory', {}).get('similarity_threshold', 0.5)
-        self.vector_dim = 512  # CLIP ViT-B/32 输出维度
-        
-        # 获取配置中的embedding_type
+        self.vector_dim = 512  # CLIP ViT-B/32 output dimension
         self.embedding_type = config.get('vector_memory', {}).get('embedding_type', None)
-        
-        # 创建持久化客户端
         self.client = chromadb.PersistentClient(path=self.vector_db_path)
-        
-        # 检查是否需要清空数据库
         clear_on_init = config.get('vector_memory', {}).get('clear_on_init', False)
         if clear_on_init:
             self.logger.info("CLEARING VECTOR DATABASE AS CONFIGURED")
             self.clear_database()
         
-        # 初始化Chroma数据库 - get_or_create_collection会自动处理创建逻辑
         self._init_chroma_db()
         
     def _init_chroma_db(self):
-        """初始化Chroma向量数据库"""
+        """Initialize Chroma vector database"""
         try:
-            # 处理embedding_type配置
             if not self.embedding_type or self.embedding_type == "":
-                # 空字符串或None，使用默认embedding
                 print(f"Use default embedding in the vector database as {self.embedding_type}.")
-                # 创建持久化客户端
                 self.object_collection = self.client.get_or_create_collection(
-                    name="ui_objects",
-                    metadata={"hnsw:space": "cosine"}
-                )
-            elif self.embedding_type == "CLIP":
-                # 使用现成的CLIP编码方法
-                print(f"Use CLIP embedding with custom encode/decode methods.")
-                self.object_collection = self.client.get_or_create_collection(
-                    embedding_function=CLIPEmbeddingFunction(),
                     name="ui_objects",
                     metadata={"hnsw:space": "cosine"}
                 )
             elif self.embedding_type in known_embedding_functions:
-                # 使用known_embedding_functions中的embedding
                 print(f"Use {self.embedding_type} to embed in the vector database.")
                 try:
-                    # 实例化embedding函数
                     embedding_function = known_embedding_functions[self.embedding_type]()
                     self.object_collection = self.client.get_or_create_collection(
                         name="ui_objects",
@@ -92,7 +62,6 @@ class VectorMemory:
                         metadata={"hnsw:space": "cosine"}
                     )
             else:
-                # 不支持的embedding_type，使用默认
                 self.logger.warning(f"Unsupported embedding_type '{self.embedding_type}', using default embedding.")
                 self.object_collection = self.client.get_or_create_collection(
                     name="ui_objects",
@@ -107,16 +76,15 @@ class VectorMemory:
     
     def encode_image(self, image: np.ndarray) -> np.ndarray:
         """
-        使用CLIP模型对图像进行向量编码
+        Encode image using CLIP model
         
         Args:
-            image: OpenCV格式的图像 (BGR)
+            image: OpenCV format image (BGR)
             
         Returns:
-            归一化的图像特征向量
+            Normalized image feature vector
         """
         try:
-            # 转换为PIL图像 (RGB)
             if len(image.shape) == 3:
                 image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             else:
@@ -124,12 +92,10 @@ class VectorMemory:
                 
             pil_image = Image.fromarray(image_rgb)
             
-            # 预处理并编码
             image_input = self.clip_preprocess(pil_image).unsqueeze(0).to(self.device)
             
             with torch.no_grad():
                 image_features = self.clip_model.encode_image(image_input)
-                # 归一化向量
                 image_features = image_features / image_features.norm(dim=-1, keepdim=True)
                 
             return image_features.cpu().numpy().flatten()
@@ -140,21 +106,19 @@ class VectorMemory:
     
     def encode_text(self, text: str) -> np.ndarray:
         """
-        使用CLIP模型对文本进行向量编码
+        Encode text using CLIP model
         
         Args:
-            text: 输入文本
+            text: Input text
             
         Returns:
-            归一化的文本特征向量
+            Normalized text feature vector
         """
         try:
-            # 对文本进行tokenize
             text_input = clip.tokenize([text]).to(self.device)
             
             with torch.no_grad():
                 text_features = self.clip_model.encode_text(text_input)
-                # 归一化向量
                 text_features = text_features / text_features.norm(dim=-1, keepdim=True)
                 
             return text_features.cpu().numpy().flatten()
@@ -165,19 +129,17 @@ class VectorMemory:
     
     def _preprocess_object_image(self, image: np.ndarray, target_size: Tuple[int, int] = (224, 224)) -> np.ndarray:
         """
-        标准化对象图像
+        Standardize object image
         
         Args:
-            image: 原始图像
-            target_size: 目标尺寸
+            image: Original image
+            target_size: Target size
             
         Returns:
-            预处理后的图像
+            Preprocessed image
         """
-        # 调整大小
         resized = cv2.resize(image, target_size, interpolation=cv2.INTER_LANCZOS4)
         
-        # 确保是3通道
         if len(resized.shape) == 2:
             resized = cv2.cvtColor(resized, cv2.COLOR_GRAY2BGR)
         elif resized.shape[2] == 4:
@@ -187,15 +149,15 @@ class VectorMemory:
     
     def _generate_object_hash(self, obj: Dict) -> str:
         """
-        生成对象的唯一哈希值
+        Generate unique hash for object
         
         Args:
-            obj: 对象字典
+            obj: Object dictionary
             
         Returns:
-            哈希字符串
+            Hash string
         """
-        # 使用bbox、content和图像hash生成唯一标识
+        # Use bbox, content and image hash to generate unique identifier
         hash_data = {
             'bbox': obj['bbox'],
             'content': obj.get('content', ''),
@@ -208,41 +170,39 @@ class VectorMemory:
     
     def store_object(self, obj: Dict) -> str:
         """
-        存储单个对象到向量数据库
+        Store single object to vector database
         
         Args:
-            obj: 包含image、bbox、content等信息的对象字典
+            obj: Object dictionary containing image, bbox, content and other info
             
         Returns:
-            存储的对象ID
+            Stored object ID
         """
         try:
             obj_type = obj.get('type', 'None')
             
-            # 根据对象类型选择不同的embedding方式
             if obj_type == 'icon':
-                # 对于icon类型，使用cropped图像的embedding
                 processed_image = self._preprocess_object_image(obj['image'])
                 embedding_vector = self.encode_image(processed_image)
             elif obj_type == 'text':
-                # 对于text类型，使用content的文本embedding
+                # For text type, use content text embedding
                 content = obj.get('content', '')
                 if content:
                     embedding_vector = self.encode_text(content)
                 else:
-                    # 如果没有content，回退到图像embedding
+                    # If no content, fallback to image embedding
                     processed_image = self._preprocess_object_image(obj['image'])
                     embedding_vector = self.encode_image(processed_image)
             else:
-                # 其他类型默认使用图像embedding
+                # Other types default to image embedding
                 processed_image = self._preprocess_object_image(obj['image'])
                 embedding_vector = self.encode_image(processed_image)
             
-            # 生成唯一ID
+            # Generate unique ID
             object_hash = self._generate_object_hash(obj)
             object_id = f"obj_{obj_type}_{object_hash[:8]}"
             
-            # 准备元数据
+            # Prepare metadata
             metadata = {
                 'object_id': str(obj.get('id', '')),
                 'bbox': json.dumps(obj['bbox']),
@@ -271,13 +231,13 @@ class VectorMemory:
     
     def batch_store_objects(self, objects: List[Dict]) -> List[str]:
         """
-        批量存储对象
+        Batch store objects
         
         Args:
-            objects: 对象列表
+            objects: Object list
             
         Returns:
-            存储的对象ID列表
+            List of stored object IDs
         """
         if not objects:
             return []
@@ -290,27 +250,21 @@ class VectorMemory:
             
             for obj in objects:
                 obj_type = obj.get('type', 'None')
-                
-                # 根据对象类型选择不同的embedding方式
+
                 if obj_type == 'icon':
-                    # 对于icon类型，使用cropped图像的embedding
                     processed_image = self._preprocess_object_image(obj['image'])
                     embedding_vector = self.encode_image(processed_image)
                 elif obj_type == 'text':
-                    # 对于text类型，使用content的文本embedding
                     content = obj.get('content', '')
                     if content:
                         embedding_vector = self.encode_text(content)
                     else:
-                        # 如果没有content，回退到图像embedding
                         processed_image = self._preprocess_object_image(obj['image'])
                         embedding_vector = self.encode_image(processed_image)
                 else:
-                    # 其他类型默认使用图像embedding
                     processed_image = self._preprocess_object_image(obj['image'])
                     embedding_vector = self.encode_image(processed_image)
                 
-                # 生成ID和元数据
                 object_hash = self._generate_object_hash(obj)
                 object_id = f"obj_{obj_type}_{object_hash[:8]}"
                 
@@ -330,7 +284,6 @@ class VectorMemory:
                 metadatas.append(metadata)
                 ids.append(object_id)
             
-            # 批量存储
             self.object_collection.add(
                 embeddings=embeddings,
                 documents=documents,
@@ -347,56 +300,49 @@ class VectorMemory:
     
     def find_similar_objects(self, query_obj: Dict, threshold: float = None, top_k: int = 5, embedding_type="default") -> List[Dict]:
         """
-        查找相似的对象
+        Find similar objects
         
         Args:
-            query_obj: 查询对象
-            threshold: 相似度阈值
-            top_k: 返回的最大结果数
+            query_obj: Query object
+            threshold: Similarity threshold
+            top_k: Maximum number of results to return
             
         Returns:
-            相似对象列表，按相似度降序排列
+            List of similar objects, sorted by similarity in descending order
         """
         if threshold is None:
             threshold = self.similarity_threshold
             
         try:
-            # 编码查询图像
             if embedding_type == "CLIP" or (self.embedding_type == "CLIP"):
-                # 使用CLIP自定义编码方法
                 processed_image = self._preprocess_object_image(query_obj['image'])
                 query_vector = self.encode_image(processed_image)
                 
-                # 在Chroma中搜索
                 results = self.object_collection.query(
                     query_embeddings=[query_vector.tolist()],
                     n_results=top_k,
                     include=['embeddings', 'documents', 'metadatas', 'distances']
                 )
             elif embedding_type in known_embedding_functions:
-                # 使用known_embedding_functions中的embedding
                 processed_image = self._preprocess_object_image(query_obj['image'])
                 query_vector = self.encode_image(processed_image)
                 
-                # 在Chroma中搜索
                 results = self.object_collection.query(
                     query_embeddings=[query_vector.tolist()],
                     n_results=top_k,
                     include=['embeddings', 'documents', 'metadatas', 'distances']
                 )
             else:
-                # 使用默认的文本搜索
                 results = self.object_collection.query(
                     query_texts=[query_obj.get('content', '')],
                     n_results=top_k,
                     include=['embeddings', 'documents', 'metadatas', 'distances']
                 )
             
-            # 处理结果
             similar_objects = []
             if results['distances'] and results['distances'][0]:
                 for i, distance in enumerate(results['distances'][0]):
-                    similarity = 1 - distance  # 转换为相似度
+                    similarity = 1 - distance
                     if similarity >= threshold:
                         metadata = results['metadatas'][0][i]
                         similar_objects.append({
@@ -416,26 +362,79 @@ class VectorMemory:
         except Exception as e:
             self.logger.error(f"SIMILARITY SEARCH FAILED: {e}")
             return []
-    
+
+    def _check_instance_similarity(self, obj1: Dict, obj2: Dict) -> Tuple[bool, float, str]:
+        """
+        Check instance-level similarity between two objects using Hash and Geometric distance
+        
+        Args:
+            obj1: First object
+            obj2: Second object
+            
+        Returns:
+            (is_duplicate, similarity_score, reason)
+        """
+        # [1] Hash similarity check (highest priority)
+        hash1 = obj1.get('hash', '')
+        hash2 = obj2.get('hash', '')
+        
+        if hash1 and hash2 and hash1 == hash2:
+            return True, 1.0, 'Hash'
+        
+        # [2] Geometric distance check
+        center1 = obj1.get('center', [0, 0])
+        center2 = obj2.get('center', [0, 0])
+        
+        if center1 and center2:
+            distance = np.sqrt((center1[0] - center2[0])**2 + (center1[1] - center2[1])**2)
+            
+            if distance <= 10:  # Centers within 10 pixels
+                similarity = 1.0 - (distance / 1000)
+                return True, similarity, f'Geo_{distance:.1f}px'
+        
+        # [3] Hash similarity (partial match for similar but not identical hashes)
+        if hash1 and hash2:
+            try:
+                # Calculate Hamming distance similarity of hashes
+                hash1_bin = bin(int(hash1, 16))[2:].zfill(64)
+                hash2_bin = bin(int(hash2, 16))[2:].zfill(64)
+                
+                hamming_distance = sum(c1 != c2 for c1, c2 in zip(hash1_bin, hash2_bin))
+                
+                # Very similar hashes (≤4 bit differences) are considered duplicates
+                if hamming_distance <= 4:
+                    similarity = 1.0 - (hamming_distance / 64.0)
+                    return True, similarity, f'similar_hash_{hamming_distance}bits'
+                    
+            except ValueError:
+                # If hash format is incorrect, use string similarity
+                common_chars = sum(c1 == c2 for c1, c2 in zip(hash1, hash2))
+                if len(hash1) > 0 and len(hash2) > 0:
+                    string_similarity = common_chars / max(len(hash1), len(hash2))
+                    if string_similarity > 0.95:  # 95% string similarity
+                        return True, string_similarity, f'string_hash_{string_similarity:.3f}'
+        
+        return False, 0.0, 'no_match'
+
     def deduplicate_objects(self, objects: List[Dict], threshold: float = None, 
                            text_weight: float = 0.3, image_weight: float = 0.5, 
                            bbox_weight: float = 0.2) -> Tuple[List[Dict], List[Dict]]:
         """
-        对象去重处理，使用优化的混合相似性检测
-        优化策略：
-        1. 使用更全面的候选对象集合
-        2. 采用多阶段相似性检测
-        3. 针对去重场景调整权重和阈值
+        Object deduplication using optimized mixed similarity detection
+        Optimization strategies:
+        1. Use more comprehensive candidate object set
+        2. Adopt multi-stage similarity detection
+        3. Adjust weights and thresholds for deduplication scenarios
         
         Args:
-            objects: 待处理的对象列表
-            threshold: 去重阈值
-            text_weight: 文本相似性权重
-            image_weight: 图像相似性权重
-            bbox_weight: 边界框相似性权重
+            objects: List of objects to process
+            threshold: Deduplication threshold
+            text_weight: Text similarity weight
+            image_weight: Image similarity weight
+            bbox_weight: Bounding box similarity weight
             
         Returns:
-            (新对象列表, 重复对象列表)
+            (new objects list, duplicate objects list)
         """
         if threshold is None:
             threshold = self.similarity_threshold
@@ -449,51 +448,31 @@ class VectorMemory:
         if database_is_empty:
             self.logger.info("DATABASE IS EMPTY - Skipping database deduplication, only checking batch duplicates")
         
-        # 为每个对象生成hash以提高比较效率
+        # Generate hash for each object to improve comparison efficiency
         for obj in objects:
             if 'hash' not in obj or not obj['hash']:
                 obj['hash'] = self._generate_object_hash(obj)
         
         for i, obj in enumerate(objects):
-            # 首先进行快速hash比较
             found_duplicate = False
             
-            # 阶段1a: 在已处理的新对象中查找完全相同的hash（批次内去重）
-            for existing_obj in new_objects:
-                if (obj.get('hash') and existing_obj.get('hash') and 
-                    obj['hash'] == existing_obj['hash']):
-                    duplicate_objects.append({
-                        'original': obj,
-                        'similar': existing_obj,
-                        'similarity': 1.0,
-                        'reason': 'identical_hash_batch'
-                    })
-                    print(f"🔄 DUPLICATE DETECTED (Hash-Batch): {obj.get('content', 'Unknown')} (Sim: 1.000)")
-                    found_duplicate = True
-                    break
-            
-            if found_duplicate:
-                continue
                 
-            # 阶段1b: 在数据库中查找完全相同的hash（与已存储对象去重）
+            # [1] Instance-level similarity check in database (Hash only, keep it simple)
             if not database_is_empty and obj.get('hash'):
                 try:
-                    # 直接使用where条件查找相同hash的对象
                     hash_results = self.object_collection.get(
                         where={"hash": obj['hash']},
                         include=['metadatas', 'documents']
                     )
                     
-                    # 如果找到相同hash的对象
                     if hash_results['ids'] and len(hash_results['ids']) > 0:
-                        # 取第一个匹配的对象
-                        matched_id = hash_results['ids'][0]
-                        matched_metadata = hash_results['metadatas'][0]
-                        matched_content = hash_results['documents'][0]
-                        
-                        duplicate_objects.append({
-                            'original': obj,
-                            'similar': {
+                        # Check all matched objects with instance similarity
+                        for i in range(len(hash_results['ids'])):
+                            matched_id = hash_results['ids'][i]
+                            matched_metadata = hash_results['metadatas'][i]
+                            matched_content = hash_results['documents'][i]
+                            
+                            candidate = {
                                 'id': matched_id,
                                 'content': matched_content,
                                 'hash': matched_metadata['hash'],
@@ -502,68 +481,77 @@ class VectorMemory:
                                 'center': json.loads(matched_metadata['center']),
                                 'type': matched_metadata['type'],
                                 'object_id': matched_metadata['object_id']
-                            },
-                            'similarity': 1.0,
-                            'reason': 'identical_hash_db'
-                        })
-                        print(f"🔄 DUPLICATE DETECTED (Hash-DB): {obj.get('content', 'Unknown')} (Sim: 1.000)")
-                        found_duplicate = True
+                            }
+                            
+                            is_duplicate, similarity, reason = self._check_instance_similarity(obj, candidate)
+                            if is_duplicate:
+                                duplicate_objects.append({
+                                    'original': obj,
+                                    'similar': candidate,
+                                    'similarity': similarity,
+                                    'reason': f'instance_db_{reason}'
+                                })
+                                print(f"🔄 DUPLICATE DETECTED (Hash/Geo): {obj.get('content', 'Unknown')} ({reason}, Sim: 1.000)")
+                                found_duplicate = True
+                                break
                         
                 except Exception as e:
                     self.logger.debug(f"⚠️  DATABASE HASH QUERY FAILED: {e}")
-                    # 如果直接hash查询失败，回退到文本查询+hash比较的方法
+                    # Fallback to text query + hash comparison (keep original logic)
                     try:
                         hash_results = self.object_collection.query(
                             query_texts=[obj.get('content', 'unknown')],
-                            n_results=20,  # 获取更多结果以便hash比较
+                            n_results=20,  # Get more results for hash comparison
                             include=['metadatas', 'documents', 'distances']
                         )
                         
-                        # 检查返回结果中是否有相同的hash
+                        # [1b] Check if there are same hashes in returned results
                         for j in range(len(hash_results['ids'][0])):
                             metadata = hash_results['metadatas'][0][j]
                             stored_hash = metadata.get('hash', '')
                             
                             if stored_hash and stored_hash == obj['hash']:
-                                duplicate_objects.append({
-                                    'original': obj,
-                                    'similar': {
-                                        'id': hash_results['ids'][0][j],
-                                        'content': hash_results['documents'][0][j],
-                                        'hash': stored_hash,
-                                        'bbox': json.loads(metadata['bbox']),
-                                        'area': metadata['area'],
-                                        'center': json.loads(metadata['center']),
-                                        'type': metadata['type'],
-                                        'object_id': metadata['object_id']
-                                    },
-                                    'similarity': 1.0,
-                                    'reason': 'identical_hash_db'
-                                })
-                                print(f"🔄 DUPLICATE DETECTED (Hash-DB): {obj.get('content', 'Unknown')} (Sim: 1.000)")
-                                found_duplicate = True
-                                break
+                                candidate = {
+                                    'id': hash_results['ids'][0][j],
+                                    'content': hash_results['documents'][0][j],
+                                    'hash': stored_hash,
+                                    'bbox': json.loads(metadata['bbox']),
+                                    'area': metadata['area'],
+                                    'center': json.loads(metadata['center']),
+                                    'type': metadata['type'],
+                                    'object_id': metadata['object_id']
+                                }
+                                
+                                is_duplicate, similarity, reason = self._check_instance_similarity(obj, candidate)
+                                if is_duplicate:
+                                    duplicate_objects.append({
+                                        'original': obj,
+                                        'similar': candidate,
+                                        'similarity': similarity,
+                                        'reason': f'instance_db_{reason}'
+                                    })
+                                    print(f"🔄 DUPLICATE DETECTED (Hash/Geo): {obj.get('content', 'Unknown')} ({reason}, Sim: {similarity:.3f})")
+                                    found_duplicate = True
+                                    break
                     except Exception as e2:
                         self.logger.debug(f"⚠️  FALLBACK HASH QUERY ALSO FAILED: {e2}")
             
             if found_duplicate:
                 continue
                 
-            # 阶段2: 使用混合查询进行更精确的相似性检测（仅在数据库非空时）
+            # [2]: Use mixed query for more precise similarity detection (only when database is not empty)
             if not database_is_empty:
                 similar_objects = self.query_collection_mixed(
                     obj, 
-                    top_k=3,  # 获取前3个最相似的对象进行比较
+                    top_k=3,  # Get top 3 most similar objects for comparison
                     text_weight=text_weight, 
                     image_weight=image_weight, 
                     bbox_weight=bbox_weight
                 )
 
                 if similar_objects:
-                    # 检查是否有超过阈值的相似对象
                     best_match = similar_objects[0]
                     if best_match['similarity'] >= threshold:
-                        # 找到相似对象，标记为重复
                         duplicate_objects.append({
                             'original': obj,
                             'similar': best_match,
@@ -574,7 +562,6 @@ class VectorMemory:
                         found_duplicate = True
             
             if not found_duplicate:
-                # 新对象
                 new_objects.append(obj)
         
         return new_objects, duplicate_objects
@@ -583,22 +570,22 @@ class VectorMemory:
                                          text_weight: float = 0.3, image_weight: float = 0.5, 
                                          bbox_weight: float = 0.2, similarity_threshold: float = None) -> List[Dict]:
         """
-        更新对象并存储到向量数据库，使用混合相似性检测
+        Update objects and store to vector database using mixed similarity detection
         
         Args:
-            objects: 对象列表
-            text_weight: 文本相似性权重
-            image_weight: 图像相似性权重
-            bbox_weight: 边界框相似性权重
-            similarity_threshold: 相似性阈值
+            objects: Object list
+            text_weight: Text similarity weight
+            image_weight: Image similarity weight
+            bbox_weight: Bounding box similarity weight
+            similarity_threshold: Similarity threshold
             
         Returns:
-            处理后的对象列表
+            Processed object list
         """
         if not objects:
             return []
         
-        # 使用混合相似性进行去重处理
+        # Use mixed similarity for deduplication
         new_objects, duplicate_objects = self.deduplicate_objects(
             objects, 
             threshold=similarity_threshold, 
@@ -607,25 +594,21 @@ class VectorMemory:
             bbox_weight=bbox_weight
         )
         
-        # 存储新对象
+        # TODO: missing ID (default as 'None') for old objects
         if new_objects:
             stored_ids = self.batch_store_objects(new_objects)
             for i, obj in enumerate(new_objects):
                 if i < len(stored_ids):
                     obj['vector_id'] = stored_ids[i]
         
-        # 处理重复对象
         for dup in duplicate_objects:
             original = dup['original']
             similar = dup['similar']
             
-            # 更新原对象的ID为相似对象的ID
             original['id'] = similar.get('object_id', similar.get('id'))
             original['vector_id'] = similar.get('id')
-            
-            self.logger.debug(f"🔗 OBJECT DEDUPLICATED: {original.get('content', 'Unknown')} -> {similar.get('id')} (Similarity: {similar.get('mixed_similarity', 0):.3f})")
+            print(f"🔗 OBJECT DEDUPLICATED: {original.get('content', 'Unknown')} -> Vector ID: {similar.get('id')}, SQL ID: {original.get('id')} (Similarity: {dup.get('similarity', 0):.3f})")
         
-        # 合并结果
         all_objects = new_objects + [dup['original'] for dup in duplicate_objects]
         
         self.logger.info(f"📊 OBJECT PROCESSING COMPLETED: {len(new_objects)} new, {len(duplicate_objects)} duplicates")
@@ -633,42 +616,36 @@ class VectorMemory:
     
     def query_collection_by_text(self, content_query: str, top_k: int = 10) -> List[Dict]:
         """
-        根据内容搜索对象
+        Search objects by content
         
         Args:
-            content_query: 内容查询字符串
-            top_k: 返回的最大结果数
+            content_query: Content query string
+            top_k: Maximum number of results to return
             
         Returns:
-            匹配的对象列表
+            List of matched objects
         """
         try:
-            # 判断逻辑与_init_chroma_db保持一致
             if not self.embedding_type or self.embedding_type == "":
-                # 空字符串或None，使用默认文本查询
                 results = self.object_collection.query(
                     query_texts=[content_query],
                     n_results=top_k,
                     include=['documents', 'metadatas', 'distances', 'embeddings']
                 )
             elif self.embedding_type == "CLIP":
-                # 使用CLIP对文本进行编码，确保与图像向量维度一致
                 text_vector = self.encode_text(content_query)
-                # 使用向量搜索而不是文档搜索
                 results = self.object_collection.query(
                     query_embeddings=[text_vector.tolist()],
                     n_results=top_k,
                     include=['documents', 'metadatas', 'distances', 'embeddings']
                 )
             elif self.embedding_type in known_embedding_functions:
-                # 使用known_embedding_functions中的embedding进行文本查询
                 results = self.object_collection.query(
                     query_texts=[content_query],
                     n_results=top_k,
                     include=['documents', 'metadatas', 'distances', 'embeddings']
                 )
             else:
-                # 不支持的embedding_type，使用默认文本查询
                 results = self.object_collection.query(
                     query_texts=[content_query],
                     n_results=top_k,
@@ -681,8 +658,8 @@ class VectorMemory:
                     metadata = results['metadatas'][0][i]
                     distance = results['distances'][0][i]
                     embedding = results['embeddings'][0][i] if results.get('embeddings') else None
-                    # 将距离转换为相似度：对于余弦距离，相似度 = 1 - distance/2
-                    # 这样可以确保相似度在 [0, 1] 范围内，1表示最相似，0表示最不相似
+                    # Convert distance to similarity: for cosine distance, similarity = 1 - distance/2
+                    # This ensures similarity is in [0, 1] range, 1 means most similar, 0 means least similar
                     similarity = max(0, 1 - distance / 2)
                     objects.append({
                         'id': results['ids'][0][i],
@@ -701,51 +678,51 @@ class VectorMemory:
             return objects
 
         except Exception as e:
-            self.logger.error(f"内容搜索失败: {e}")
+            self.logger.error(f"Content search failed: {e}")
             return []
 
     def query_collection_by_image(self, query_image: np.ndarray, top_k: int = 10) -> List[Dict]:
         """
-        根据图像搜索对象
+        Search objects by image
         
         Args:
-            query_image: 查询图像的numpy数组
-            top_k: 返回的最大结果数
+            query_image: Query image numpy array
+            top_k: Maximum number of results to return
             
         Returns:
-            匹配的对象列表
+            List of matched objects
         """
         try:
-            # 判断逻辑与_init_chroma_db保持一致
+            # Keep logic consistent with _init_chroma_db
             if not self.embedding_type or self.embedding_type == "":
-                # 默认embedding不支持图像查询
-                self.logger.warning("默认embedding不支持图像查询")
+                # Default embedding does not support image queries
+                self.logger.warning("Default embedding does not support image queries")
                 return []
             elif self.embedding_type == "CLIP":
-                # 使用CLIP对图像进行编码
+                # Use CLIP to encode images
                 image_vector = self.encode_image(query_image)
-                # 使用向量搜索
+                # Use vector search
                 results = self.object_collection.query(
                     query_embeddings=[image_vector.tolist()],
                     n_results=top_k,
                     include=['documents', 'metadatas', 'distances', 'embeddings']
                 )
             elif self.embedding_type in known_embedding_functions:
-                # 对于支持多模态的embedding函数（如open_clip），使用图像查询
+                # For multimodal embedding functions (like open_clip), use image queries
                 if self.embedding_type == "open_clip":
-                    # OpenCLIPEmbeddingFunction支持图像查询
+                    # OpenCLIPEmbeddingFunction supports image queries
                     results = self.object_collection.query(
                         query_images=[query_image],
                         n_results=top_k,
                         include=['documents', 'metadatas', 'distances', 'embeddings']
                     )
                 else:
-                    # 其他embedding函数可能不支持图像查询
-                    self.logger.warning(f"Embedding函数 '{self.embedding_type}' 可能不支持图像查询")
+                    # Other embedding functions may not support image queries
+                    self.logger.warning(f"Embedding function '{self.embedding_type}' may not support image queries")
                     return []
             else:
-                # 不支持的embedding_type
-                self.logger.warning(f"不支持的embedding_type '{self.embedding_type}' 进行图像查询")
+                # Unsupported embedding_type
+                self.logger.warning(f"Unsupported embedding_type '{self.embedding_type}' for image queries")
                 return []
 
             objects = []
@@ -754,8 +731,8 @@ class VectorMemory:
                     metadata = results['metadatas'][0][i]
                     distance = results['distances'][0][i]
                     embedding = results['embeddings'][0][i] if results.get('embeddings') else None
-                    # 将距离转换为相似度：对于余弦距离，相似度 = 1 - distance/2
-                    # 这样可以确保相似度在 [0, 1] 范围内，1表示最相似，0表示最不相似
+                    # Convert distance to similarity: for cosine distance, similarity = 1 - distance/2
+                    # This ensures similarity is in [0, 1] range, 1 means most similar, 0 means least similar
                     similarity = max(0, 1 - distance / 2)
                     objects.append({
                         'id': results['ids'][0][i],
@@ -774,15 +751,15 @@ class VectorMemory:
             return objects
 
         except Exception as e:
-            self.logger.error(f"图像搜索失败: {e}")
+            self.logger.error(f"Image search failed: {e}")
             return []
     
     def get_collection_stats(self) -> Dict:
         """
-        获取向量数据库统计信息
+        Get vector database statistics
         
         Returns:
-            统计信息字典
+            Statistics dictionary
         """
         try:
             count = self.object_collection.count()
@@ -793,74 +770,74 @@ class VectorMemory:
                 'db_path': self.vector_db_path
             }
         except Exception as e:
-            self.logger.error(f"获取统计信息失败: {e}")
+            self.logger.error(f"Failed to get collection statistics: {e}")
             return {}
     
     def query_collection_mixed(self, query_obj: Dict, top_k: int = 10, 
                               text_weight: float = 0.4, image_weight: float = 0.4, 
                               bbox_weight: float = 0.2, bbox_scale: float = 1000.0) -> List[Dict]:
         """
-        混合查询方法，结合文本相似度、图像相似度和bbox位置距离
-        优化版本：获取更全面的候选对象集合，避免遗漏相似对象
+        Mixed query method combining text similarity, image similarity and bbox position distance
+        Optimized version: Get comprehensive candidate object set to avoid missing similar objects
         
         Args:
-            query_obj: 查询对象，包含 content, cropped_image, bbox 等字段
-            top_k: 返回结果数量
-            text_weight: 文本相似度权重
-            image_weight: 图像相似度权重  
-            bbox_weight: bbox距离权重
-            bbox_scale: bbox距离归一化缩放因子
+            query_obj: Query object containing content, cropped_image, bbox and other fields
+            top_k: Number of results to return
+            text_weight: Text similarity weight
+            image_weight: Image similarity weight  
+            bbox_weight: Bbox distance weight
+            bbox_scale: Bbox distance normalization scale factor
             
         Returns:
-            综合相似度排序的对象列表
+            Object list sorted by comprehensive similarity
         """
         try:
-            # 为query_obj生成hash（如果没有的话）
+            # Generate hash for query_obj if not present
             if 'hash' not in query_obj or not query_obj['hash']:
                 query_obj['hash'] = self._generate_object_hash(query_obj)
             
-            # 获取数据库中的总对象数量
+            # Get total object count in database
             collection_count = self.object_collection.count()
             if collection_count == 0:
                 self.logger.info("📭 VECTOR DATABASE IS EMPTY - No candidates available for similarity search")
                 return []
             
-            # 动态调整候选对象数量，确保不遗漏相似对象
-            # 对于去重场景，我们需要更全面的候选集合
-            if top_k == 1:  # 去重场景，获取更多候选对象
+            # Dynamically adjust candidate object count to ensure no similar objects are missed
+            # For deduplication scenarios, we need a more comprehensive candidate set
+            if top_k == 1:  # Deduplication scenario, get more candidate objects
                 candidate_k = min(collection_count, max(500, collection_count // 2))
-            else:  # 常规查询场景
+            else:  # Regular query scenario
                 candidate_k = min(collection_count, max(top_k * 10, 100))
             
-            # 获取候选对象集合 - 使用多种策略确保覆盖面
+            # Get candidate object set - use multiple strategies to ensure coverage
             all_candidates = {}
             
-            # 策略1: 文本查询获取候选对象
+            # [1] Text query
             if 'content' in query_obj and query_obj['content']:
                 text_results = self.query_collection_by_text(query_obj['content'], candidate_k)
                 for result in text_results:
                     all_candidates[result['id']] = result
             
-            # 策略2: 图像查询获取候选对象（与文本查询并行，不是补充）
+            # [2]: Image query
             if 'image' in query_obj and query_obj['image'] is not None:
                 image_results = self.query_collection_by_image(query_obj['image'], candidate_k)
                 for result in image_results:
                     if result['id'] not in all_candidates:
                         all_candidates[result['id']] = result
             
-            # 策略3: 如果候选对象仍然不足，获取所有对象进行全面比较
+            # [3]: If candidate objects are still insufficient, get all objects for comprehensive comparison
             if len(all_candidates) < candidate_k:
                 try:
                     remaining_needed = candidate_k - len(all_candidates)
                     results = self.object_collection.query(
-                        query_texts=["*"],  # 通用查询
+                        query_texts=["*"], 
                         n_results=min(remaining_needed, collection_count),
                         include=['metadatas', 'documents', 'distances', 'embeddings']
                     )
                     
                     for i in range(len(results['ids'][0])):
                         obj_id = results['ids'][0][i]
-                        if obj_id not in all_candidates:  # 避免重复
+                        if obj_id not in all_candidates:  # Avoid duplicates
                             metadata = results['metadatas'][0][i]
                             doc = results['documents'][0][i]
                             distance = results['distances'][0][i]
@@ -883,56 +860,56 @@ class VectorMemory:
                 except Exception as e:
                     self.logger.warning(f"⚠️  FAILED TO GET ADDITIONAL CANDIDATES: {e}")
             
-            # 为所有候选对象计算完整的文本和图像相似度
+            # complete text and image similarity for all candidate objects
             query_text_embedding = None
             
-            # 准备查询嵌入
+            # Prepare query embeddings
             if 'content' in query_obj and query_obj['content']:
                 query_text_embedding = self.encode_text(query_obj['content'])
             
-            # 为每个候选对象计算相似度
+            # similarity for each candidate object
             for obj_id, candidate in all_candidates.items():
                 text_similarity = 0.0
                 image_similarity = 0.0
                 
-                # 计算文本相似度
+                # text similarity
                 if query_text_embedding is not None and candidate.get('content'):
                     try:
                         candidate_text_embedding = self.encode_text(candidate['content'])
-                        # 计算余弦相似度
+                        # cosine similarity
                         text_cosine_sim = np.dot(query_text_embedding, candidate_text_embedding) / (
                             np.linalg.norm(query_text_embedding) * np.linalg.norm(candidate_text_embedding)
                         )
-                        text_similarity = max(0, (text_cosine_sim + 1) / 2)  # 转换到[0,1]范围
+                        text_similarity = max(0, (text_cosine_sim + 1) / 2)  # Convert to [0,1] range
                     except Exception as e:
                         self.logger.debug(f"⚠️  TEXT SIMILARITY CALCULATION FAILED: {e}")
                 
-                # 优化的图像相似度计算 - 使用hash比较和更精确的阈值
+                # Optimized image similarity calculation - use hash comparison and more precise thresholds
                 if 'hash' in query_obj and query_obj['hash'] and 'hash' in candidate and candidate['hash']:
                     try:
                         query_hash = query_obj['hash']
                         candidate_hash = candidate['hash']
                         
-                        # 如果hash完全相同，相似度为1.0
+                        # If hashes are identical, similarity is 1.0
                         if query_hash == candidate_hash:
                             image_similarity = 1.0
                         else:
-                            # 计算hash的汉明距离相似度
+                            # Calculate Hamming distance similarity of hashes
                             try:
-                                query_bin = bin(int(query_hash, 16))[2:].zfill(64)  # 转为64位二进制
+                                query_bin = bin(int(query_hash, 16))[2:].zfill(64)  # Convert to 64-bit binary
                                 candidate_bin = bin(int(candidate_hash, 16))[2:].zfill(64)
                                 
-                                # 计算汉明距离
+                                # Calculate Hamming distance
                                 hamming_distance = sum(c1 != c2 for c1, c2 in zip(query_bin, candidate_bin))
-                                # 转换为相似度，使用更敏感的阈值
+                                # Convert to similarity, use more sensitive threshold
                                 max_distance = 64.0
-                                # 对于去重场景，我们需要更严格的相似度判断
-                                if hamming_distance <= 8:  # 允许少量差异
+                                # For deduplication scenarios, we need stricter similarity judgment
+                                if hamming_distance <= 8:  # Allow small differences
                                     image_similarity = 1.0 - (hamming_distance / max_distance) * 0.5
                                 else:
                                     image_similarity = max(0, 1 - hamming_distance / max_distance)
                             except ValueError:
-                                # 如果hash格式不正确，使用字符串相似度
+                                # If hash format is incorrect, use string similarity
                                 common_chars = sum(c1 == c2 for c1, c2 in zip(query_hash, candidate_hash))
                                 image_similarity = common_chars / max(len(query_hash), len(candidate_hash))
                     except Exception as e:
@@ -944,7 +921,7 @@ class VectorMemory:
                 candidate['text_similarity'] = text_similarity
                 candidate['image_similarity'] = image_similarity
             
-            # 计算bbox距离相似度
+            # Calculate bbox distance similarity
             query_bbox = query_obj.get('bbox', None)
             if query_bbox:
                 query_center = query_obj.get('center', None)
@@ -952,35 +929,42 @@ class VectorMemory:
                 for obj_id, candidate in all_candidates.items():
                     candidate_center = candidate.get('center', None)
                     
-                    # 计算欧几里得距离
+                    # Calculate Euclidean distance
                     distance = np.sqrt((query_center[0] - candidate_center[0])**2 + 
                                      (query_center[1] - candidate_center[1])**2)
                     
-                    # 将距离转换为相似度 (距离越小，相似度越高)
-                    bbox_similarity = max(0, 1 - distance / bbox_scale)
+                    # Check if centers are very close (within 10 pixels) - consider as duplicate
+                    if distance <= 10:
+                        bbox_similarity = 1.0  # Very high similarity for close centers
+                    else:
+                        # Convert distance to similarity (smaller distance, higher similarity)
+                        bbox_similarity = max(0, 1 - distance / bbox_scale)
+                    
                     candidate['bbox_similarity'] = bbox_similarity
+                    candidate['center_distance'] = distance  # Store distance for debugging
             else:
-                # 如果没有bbox信息，bbox相似度设为0.5（中性值）
+                # If no bbox info, set bbox similarity to 0.5 (neutral value)
                 for candidate in all_candidates.values():
                     candidate['bbox_similarity'] = 0.5
+                    candidate['center_distance'] = float('inf')
             
-            # 计算综合相似度
+            # Calculate comprehensive similarity
             for candidate in all_candidates.values():
-                # 归一化权重
+                # Normalize weights
                 total_weight = text_weight + image_weight + bbox_weight
                 norm_text_weight = text_weight / total_weight
                 norm_image_weight = image_weight / total_weight
                 norm_bbox_weight = bbox_weight / total_weight
                 
-                # 计算加权综合相似度
+                # Calculate weighted comprehensive similarity
                 mixed_similarity = (candidate['text_similarity'] * norm_text_weight + 
                                   candidate['image_similarity'] * norm_image_weight + 
                                   candidate['bbox_similarity'] * norm_bbox_weight)
                 
                 candidate['mixed_similarity'] = mixed_similarity
-                candidate['similarity'] = mixed_similarity  # 更新主相似度字段
+                candidate['similarity'] = mixed_similarity  # Update main similarity field
             
-            # 按综合相似度排序并返回top_k结果
+            # Sort by comprehensive similarity and return top_k results
             sorted_results = sorted(all_candidates.values(), 
                                   key=lambda x: x['mixed_similarity'], reverse=True)
             
@@ -990,19 +974,86 @@ class VectorMemory:
             self.logger.error(f"❌ MIXED QUERY FAILED: {e}")
             return []
     
-    def clear_database(self):
-        """清空向量数据库"""
+    def update_object_metadata(self, vector_id: str, sql_id: int):
+        """
+        Update the object_id metadata in VectorDB after SQL storage
+        
+        Args:
+            vector_id: The vector database ID
+            sql_id: The SQL database ID (lastrowid)
+        """
         try:
-            # 删除collection
+            # Get current metadata
+            result = self.object_collection.get(ids=[vector_id], include=['metadatas'])
+            if result['ids'] and len(result['ids']) > 0:
+                current_metadata = result['metadatas'][0]
+                # Update object_id with SQL ID
+                current_metadata['object_id'] = str(sql_id)
+                
+                # Update the metadata in VectorDB
+                self.object_collection.update(
+                    ids=[vector_id],
+                    metadatas=[current_metadata]
+                )
+                self.logger.debug(f"🔄 UPDATED VECTOR METADATA: Vector_ID={vector_id} -> SQL_ID={sql_id}")
+                return True
+            else:
+                self.logger.warning(f"⚠️  VECTOR ID NOT FOUND: {vector_id}")
+                return False
+        except Exception as e:
+            self.logger.error(f"❌ FAILED TO UPDATE METADATA: Vector_ID={vector_id}, Error={e}")
+            return False
+
+    def batch_update_object_metadata(self, vector_sql_id_pairs: List[Tuple[str, int]]):
+        """
+        Batch update object_id metadata in VectorDB
+        
+        Args:
+            vector_sql_id_pairs: List of (vector_id, sql_id) tuples
+        """
+        try:
+            vector_ids = [pair[0] for pair in vector_sql_id_pairs]
+            sql_ids = [pair[1] for pair in vector_sql_id_pairs]
+            
+            # Get current metadata for all objects
+            result = self.object_collection.get(ids=vector_ids, include=['metadatas'])
+            
+            if result['ids'] and len(result['ids']) > 0:
+                updated_metadatas = []
+                for i, metadata in enumerate(result['metadatas']):
+                    if i < len(sql_ids):
+                        metadata['object_id'] = str(sql_ids[i])
+                        updated_metadatas.append(metadata)
+                
+                # Batch update metadata
+                self.object_collection.update(
+                    ids=vector_ids[:len(updated_metadatas)],
+                    metadatas=updated_metadatas
+                )
+                
+                self.logger.info(f"🔄 BATCH METADATA UPDATE COMPLETED: {len(updated_metadatas)} objects")
+                return True
+            else:
+                self.logger.warning(f"⚠️  NO VECTOR IDS FOUND FOR BATCH UPDATE")
+                return False
+        except Exception as e:
+            self.logger.error(f"❌ BATCH METADATA UPDATE FAILED: {e}")
+            return False
+
+
+    def clear_database(self):
+        """Clear vector database"""
+        try:
+            # Delete collection
             self.client.delete_collection("ui_objects")
             
-            # 重新创建
+            # Recreate
             # self.object_collection = self.client.create_collection(
             #     name="ui_objects",
             #     metadata={"hnsw:space": "cosine"}
             # )
             
-            self.logger.info("向量数据库已清空")
+            self.logger.info("Vector database cleared")
             
         except Exception as e:
-            self.logger.error(f"清空数据库失败: {e}")
+            self.logger.error(f"Failed to clear database: {e}")

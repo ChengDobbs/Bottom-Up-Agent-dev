@@ -1,43 +1,3 @@
-import yaml
-import os
-
-def load_mcp_tools_config(config_path=None):
-    """
-    Load MCP tools configuration from config file
-    """
-    if config_path is None:
-        # Default to crafter config, can be overridden
-        config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'gym', 'crafter_config.yaml')
-    
-    try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
-            return config.get('mcp_tools', {})
-    except Exception as e:
-        print(f"Warning: Could not load MCP tools config from {config_path}: {e}")
-        return {}
-
-def get_enabled_tools_for_mode(config, mode='full_mode'):
-    """
-    Get enabled tools for a specific mode from config
-    """
-    if not config:
-        return None
-    
-    mode_config = config.get(mode, {})
-    enabled_tools = mode_config.get('enabled_tools', [])
-    
-    if enabled_tools == 'all':
-        # Return all available tools
-        all_tools = []
-        all_tools.extend(config.get('environment_tools', []))
-        all_tools.extend(config.get('skill_tools', []))
-        all_tools.extend(config.get('operation_tools', []))
-        all_tools.extend(config.get('game_specific_tools', []))
-        return all_tools
-    
-    return enabled_tools
-
 def generate_skill_tools(model_name):
     if "claude" in model_name:
         return [
@@ -84,8 +44,40 @@ def generate_skill_tools(model_name):
                             "description": "The description of what was done and what needs to continue"
                         },
                         "next_action_hint": {
-                            "type": "string",
-                            "description": "Hint about what action should be performed next to complete the sequence"
+                            "type": "object",
+                            "description": "Structured hint containing specific action details for continuation",
+                            "properties": {
+                                "action_type": {
+                                    "type": "string",
+                                    "description": "Type of action to perform",
+                                    "enum": ["Click", "Drag", "Key"]
+                                },
+                                "target_coordinates": {
+                                    "type": "array",
+                                    "description": "Exact [x, y] coordinates or [x1, y1, x2, y2] coordinates for the action",
+                                    "items": {"type": "number"},
+                                    "minItems": 2,
+                                    "maxItems": 4
+                                },
+                                "target_object_id": {
+                                    "type": "string",
+                                    "description": "ID of the target object (if applicable)"
+                                },
+                                "keyboard_key": {
+                                    "type": "string",
+                                    "description": "Specific keyboard key to press (if action_type is 'Key')"
+                                },
+                                "reasoning": {
+                                    "type": "string",
+                                    "description": "Brief explanation of why this specific action should be taken next"
+                                },
+                                "expected_outcome": {
+                                    "type": "string",
+                                    "description": "What should happen after performing this action"
+                                }
+                            },
+                            "required": ["action_type", "reasoning", "expected_outcome"],
+                            "additionalProperties": False
                         }
                     },
                     "required": ["name", "description", "next_action_hint"],
@@ -118,273 +110,6 @@ def generate_skill_tools(model_name):
                 }
             }
         ]
-    else:
-        print(f"Model {model_name} not found")
-        return None
-
-
-def environment_query_tools(model_name):
-    """Environment query tools for MCP-style interaction"""
-    if "claude" in model_name:
-        return [
-            {
-                "name": "query_environment",
-                "description": "Query current UI environment information to get real-time data about detected objects",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "query_type": {
-                            "type": "string",
-                            "enum": ["all_objects", "text_content", "specific_object", "object_summary", "game_state", "historical_context", "scene_summary", "available_actions"],
-                            "description": "Type of environment query to perform. 'scene_summary' provides concise player surroundings info. 'available_actions' returns prioritized actions player can execute now."
-                        },
-                        "object_id": {
-                            "type": "string",
-                            "description": "Specific object ID to query (required for specific_object query_type)"
-                        },
-                        "context_query": {
-                            "type": "string",
-                            "description": "Query string for historical context search (optional for historical_context query_type)"
-                        }
-                    },
-                    "required": ["query_type"],
-                    "additionalProperties": False
-                }
-            }
-        ]
-    elif model_name == "gpt-4o" or model_name == "o4-mini":
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "query_environment",
-                    "description": "Query current UI environment information to get real-time data about detected objects",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query_type": {
-                                "type": "string",
-                                "enum": ["all_objects", "text_content", "specific_object", "object_summary", "game_state", "historical_context", "scene_summary", "available_actions"],
-                                "description": "Type of environment query to perform. 'scene_summary' provides concise player surroundings info. 'available_actions' returns prioritized actions player can execute now. Note: 'clickable_objects' has been replaced with 'historical_context' for better efficiency"
-                            },
-                            "object_id": {
-                                "type": "string",
-                                "description": "Specific object ID to query (required for specific_object query_type)"
-                            },
-                            "context_query": {
-                                "type": "string",
-                                "description": "Query string for historical context search (optional for historical_context query_type)"
-                            }
-                        },
-                        "required": ["query_type"],
-                        "additionalProperties": False
-                    }
-                }
-            }
-        ]
-    else:
-        print(f"Model {model_name} not found")
-        return None
-
-
-def mcp_interaction_tools(model_name, config_path=None, mode='full_mode', game_name=None):
-    """Combined tools for MCP-style structured interaction with configurable tool selection"""
-    # Load MCP tools configuration
-    mcp_config = load_mcp_tools_config(config_path)
-    enabled_tools = get_enabled_tools_for_mode(mcp_config, mode)
-    
-    # Get all available tool functions
-    all_tools = []
-    
-    # Add environment tools if enabled
-    if not enabled_tools or any(tool in enabled_tools for tool in ['query_environment', 'query_hand', 'query_energy', 'query_health', 'query_enemies']):
-        env_tools = environment_query_tools(model_name)
-        if env_tools:
-            all_tools.extend(env_tools)
-    
-    # Add skill tools if enabled
-    if not enabled_tools or any(tool in enabled_tools for tool in ['select_skill', 'evaluate_combo']):
-        skill_tools = select_skill_tools(model_name)
-        if skill_tools:
-            all_tools.extend(skill_tools)
-    
-    # Add operation tools if enabled - but exclude click operations for Crafter
-    if not enabled_tools or any(tool in enabled_tools for tool in ['Click', 'RightSingle', 'LeftDouble', 'Type', 'Drag', 'Finished', 'Scroll']):
-        # For Crafter, skip click-based operation tools
-        if game_name != "Crafter":
-            operation_tools = do_operation_tools(model_name)
-            if operation_tools:
-                all_tools.extend(operation_tools)
-        else:
-            print(f"🎯 Skipping click-based operation tools for Crafter game")
-    
-    # Add keyboard action tools if enabled
-    if not enabled_tools or any(tool in enabled_tools for tool in ['move_actions', 'craft_actions', 'interact_actions', 'movement', 'interaction']):
-        keyboard_tools = keyboard_action_tools(model_name)
-        if keyboard_tools:
-            all_tools.extend(keyboard_tools)
-    
-    # Log which tools are being used
-    if mcp_config and enabled_tools:
-        print(f"MCP Tools loaded for mode '{mode}' (game: {game_name}): {enabled_tools}")
-    else:
-        print(f"MCP Tools: Using default full tool set (no config found or full_mode) for game: {game_name}")
-    
-    return all_tools if all_tools else None
-
-
-def keyboard_action_tools(model_name):
-    """Generic keyboard action tools for game control - specific mappings defined in config"""
-    if "claude" in model_name:
-        return [
-            {
-                "name": "move_up",
-                "description": "Move character/cursor up",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False
-                }
-            },
-            {
-                "name": "move_down",
-                "description": "Move character/cursor down",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False
-                }
-            },
-            {
-                "name": "move_left",
-                "description": "Move character/cursor left",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False
-                }
-            },
-            {
-                "name": "move_right",
-                "description": "Move character/cursor right",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False
-                }
-            },
-            {
-                "name": "interact",
-                "description": "Primary interaction action",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False
-                }
-            },
-            {
-                "name": "sleep",
-                "description": "Rest/sleep action",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False
-                }
-            },
-            {
-                "name": "place_table",
-                "description": "Place crafting table",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False
-                }
-            },
-            {
-                "name": "place_stone",
-                "description": "Place stone block",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False
-                }
-            },
-            {
-                "name": "place_furnace",
-                "description": "Place furnace",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False
-                }
-            },
-            {
-                "name": "plant_sapling",
-                "description": "Plant sapling",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False
-                }
-            },
-            {
-                "name": "craft_wood_pickaxe",
-                "description": "Craft wood pickaxe",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False
-                }
-            },
-            {
-                "name": "craft_stone_pickaxe",
-                "description": "Craft stone pickaxe",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False
-                }
-            },
-            {
-                "name": "craft_iron_pickaxe",
-                "description": "Craft iron pickaxe",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False
-                }
-            },
-            {
-                "name": "craft_wood_sword",
-                "description": "Craft wood sword",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False
-                }
-            },
-            {
-                "name": "craft_stone_sword",
-                "description": "Craft stone sword",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False
-                }
-            },
-            {
-                "name": "craft_iron_sword",
-                "description": "Craft iron sword",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False
-                }
-            }
-        ]
-    elif model_name == "gpt-4o" or model_name == "o4-mini":
-        # GPT-4 format tools would go here
-        return None
     else:
         print(f"Model {model_name} not found")
         return None

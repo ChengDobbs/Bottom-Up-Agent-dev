@@ -51,34 +51,61 @@ class LongMemory:
 
         cursor.execute("CREATE TABLE IF NOT EXISTS states (id INTEGER PRIMARY KEY, state_feature BLOB, mcts TEXT, object_ids TEXT, skill_clusters TEXT)")
 
-        cursor.execute("CREATE TABLE IF NOT EXISTS objects (id INTEGER PRIMARY KEY, content TEXT , image BLOB, hash BLOB, area INTEGER, vector_id TEXT, bbox TEXT, center TEXT, interactivity TEXT DEFAULT 'unknown')")
+        cursor.execute("CREATE TABLE IF NOT EXISTS objects (id INTEGER PRIMARY KEY, content TEXT , image BLOB, hash BLOB, area INTEGER, bbox TEXT, center TEXT, history_centers TEXT, vector_id TEXT, linked_skill_id INTEGER, is_click_change INTEGER DEFAULT 0, is_hover_change INTEGER DEFAULT 0, hover_tooltip TEXT)")
 
         cursor.execute("CREATE TABLE IF NOT EXISTS skills (id INTEGER PRIMARY KEY, name TEXT, description TEXT, operations TEXT, " \
         "fitness REAL, num INTEGER, state_id INTEGER, mcts_node_id INTEGER, image1 BLOB, image2 BLOB)")
 
         cursor.execute("CREATE TABLE IF NOT EXISTS skill_clusters (id INTEGER PRIMARY KEY, state_feature BLOB, name TEXT, description TEXT, members TEXT, explore_nums INTEGER)")
-        
-        cursor.execute("CREATE TABLE IF NOT EXISTS object_interactions (id INTEGER PRIMARY KEY, object_id INTEGER, operation_type TEXT, interactivity TEXT, screen_change_ratio REAL, state_changed INTEGER, timestamp REAL, FOREIGN KEY(object_id) REFERENCES objects(id))")
 
         conn.commit()
 
+    def _normalize_image_color_format(self, image, for_storage=True):
+        if image is None or len(image.shape) != 3 or image.shape[2] != 3:
+            # Not a color image, return as-is
+            return image
+        
+        if for_storage:
+            # Convert RGB to BGR for OpenCV storage consistency
+            return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        else:
+            # Convert BGR to RGB for application usage consistency
+            return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    def _encode_image_blob(self, image):
+        normalized_image = self._normalize_image_color_format(image, for_storage=True)
+        
+        # Encode to PNG format
+        success, image_blob = cv2.imencode('.png', normalized_image)
+        if not success:
+            raise ValueError("Failed to encode image to PNG format")
+        
+        return image_blob.tobytes()
+
+    def _decode_image_blob(self, image_blob):
+        image_bgr = cv2.imdecode(np.frombuffer(image_blob, np.uint8), cv2.IMREAD_COLOR)
+        if image_bgr is None:
+            raise ValueError("Failed to decode image blob")
+        
+        # Normalize color format for application usage
+        return self._normalize_image_color_format(image_bgr, for_storage=False)
 
     """   Objects   """
-        
     def get_object_by_ids(self, ids):
         objects = []
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT id, content, image, hash, area, vector_id, bbox, center, interactivity FROM objects WHERE id IN ({})'.format(','.join('?'*len(ids))), ids)
+        cursor.execute('SELECT id, content, image, hash, area, bbox, center, history_centers, vector_id, linked_skill_id, is_click_change, is_hover_change, hover_tooltip FROM objects WHERE id IN ({})'.format(','.join('?'*len(ids))), ids)
         records = cursor.fetchall()
 
         for record in records:
-            id, content, image_blob, hash_blob, area, vector_id, bbox_str, center_str, interactivity = record
-            image = cv2.imdecode(np.frombuffer(image_blob, np.uint8), cv2.IMREAD_COLOR)
+            id, content, image_blob, hash_blob, area, bbox_str, center_str, history_centers, vector_id, linked_skill_id, is_click_change, is_hover_change, hover_tooltip = record
+            image = self._decode_image_blob(image_blob)
             hash = pickle.loads(hash_blob)
             
-            bbox = json.loads(bbox_str) if bbox_str else []
-            center = json.loads(center_str) if center_str else [0, 0]
+            bbox = json.loads(bbox_str)
+            center = json.loads(center_str)
+            history_centers_list = json.loads(history_centers) if history_centers else []
             
             objects.append({
                 "id": id, 
@@ -89,17 +116,55 @@ class LongMemory:
                 "vector_id": vector_id,
                 "bbox": bbox,
                 "center": center,
-                "interactivity": interactivity or 'unknown'
+                "history_centers": history_centers_list,
+                "linked_skill_id": linked_skill_id,
+                "is_click_change": bool(is_click_change) if is_click_change is not None else False,
+                "is_hover_change": bool(is_hover_change) if is_hover_change is not None else False,
+                "hover_tooltip": hover_tooltip
             })
 
         return objects
+
+    def get_object_by_vector_id(self, vector_id):
+        """Get object by vector_id from the database"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, content, image, hash, area, bbox, center, history_centers, vector_id, linked_skill_id, is_click_change, is_hover_change, hover_tooltip FROM objects WHERE vector_id = ?', (vector_id,))
+        record = cursor.fetchone()
+        
+        if record is None:
+            return None
+            
+        id, content, image_blob, hash_blob, area, bbox_str, center_str, history_centers, vector_id, linked_skill_id, is_click_change, is_hover_change, hover_tooltip = record
+        image = cv2.imdecode(np.frombuffer(image_blob, np.uint8), cv2.IMREAD_COLOR)
+        hash = pickle.loads(hash_blob)
+        
+        bbox = json.loads(bbox_str)
+        center = json.loads(center_str)
+        history_centers = json.loads(history_centers) if history_centers else []
+        
+        return {
+            "id": id, 
+            "content": content, 
+            "image": image, 
+            "hash": hash, 
+            "area": area,
+            "vector_id": vector_id,
+            "bbox": bbox,
+            "center": center,
+            "history_centers": history_centers,
+            "is_click_change": bool(is_click_change) if is_click_change is not None else False,
+            "linked_skill_id": linked_skill_id,
+            "is_hover_change": bool(is_hover_change) if is_hover_change is not None else False,
+            "hover_tooltip": hover_tooltip
+        }
 
     def get_recent_objects(self, limit=50):
         """Get recent objects from the database for MCP context"""
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT id, content, image, hash, area, vector_id, bbox, center, interactivity 
+            SELECT id, content, image, hash, area, bbox, center, history_centers, vector_id, linked_skill_id, is_click_change, is_hover_change, hover_tooltip
             FROM objects 
             ORDER BY id DESC 
             LIMIT ?
@@ -108,12 +173,13 @@ class LongMemory:
         
         objects = []
         for record in records:
-            id, content, image_blob, hash_blob, area, vector_id, bbox_str, center_str, interactivity = record
-            image = cv2.imdecode(np.frombuffer(image_blob, np.uint8), cv2.IMREAD_COLOR)
+            id, content, image_blob, hash_blob, area, bbox_str, center_str, history_centers, vector_id, linked_skill_id, is_click_change, is_hover_change, hover_tooltip = record
+            image = self._decode_image_blob(image_blob)
             hash = pickle.loads(hash_blob)
             
-            bbox = json.loads(bbox_str) if bbox_str else []
-            center = json.loads(center_str) if center_str else [0, 0]
+            bbox = json.loads(bbox_str)
+            center = json.loads(center_str)
+            history_centers_list = json.loads(history_centers) if history_centers else []
             
             objects.append({
                 "id": id, 
@@ -124,7 +190,11 @@ class LongMemory:
                 "vector_id": vector_id,
                 "bbox": bbox,
                 "center": center,
-                "interactivity": interactivity or 'unknown'
+                "is_click_change": bool(is_click_change) if is_click_change is not None else False,
+                "linked_skill_id": linked_skill_id,
+                "history_centers": history_centers_list,
+                "is_hover_change": bool(is_hover_change) if is_hover_change is not None else False,
+                "hover_tooltip": hover_tooltip
             })
         
         return objects
@@ -140,39 +210,116 @@ class LongMemory:
             bbox_weight=bbox_weight, similarity_threshold=0.85
         )
         
+        # Fix objects with None ID by querying SQL database using vector_id
+        for obj in processed_objects:
+            if obj['id'] is None and obj.get('vector_id'):
+                sql_obj = self.get_object_by_vector_id(obj['vector_id'])
+                if sql_obj:
+                    obj['id'] = sql_obj['id']
+                    print(f"🔧 FIXED MISSING ID: Vector_ID={obj['vector_id']} -> SQL ID={obj['id']}")
+                else:
+                    print(f"⚠️ VECTOR_ID NOT FOUND IN SQL: {obj['vector_id']} for content '{obj['content'][:20]}...'")
+        
+        # Collect vector_id and sql_id pairs for batch metadata update
+        vector_sql_id_pairs = []
+        
         for obj in processed_objects:
             if obj['id'] is None:
-                _, image_blob = cv2.imencode('.png', obj['image'])
-                image_blob = image_blob.tobytes()
+                # FIRST TIME SAVE: New object detected, initialize with current position
+                image_blob = self._encode_image_blob(obj['image'])
                 hash_blob = pickle.dumps(obj['hash'])
                 
+                # Initialize history_centers with current center position
+                initial_history = [obj['center']]
+                
                 cursor.execute(
-                    "INSERT INTO objects (content, image, hash, area, vector_id, bbox, center, interactivity) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", 
+                    "INSERT INTO objects (content, image, hash, area, bbox, center, history_centers, vector_id, linked_skill_id, is_click_change, is_hover_change, hover_tooltip) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", 
                     (
                         obj['content'], 
                         image_blob, 
                         hash_blob, 
                         obj['area'],
-                        obj.get('vector_id', ''),
                         json.dumps(obj['bbox']),
                         json.dumps(obj['center']),
-                        obj.get('interactivity', 'unknown')
+                        json.dumps(initial_history),  # history_centers initialized with current position
+                        obj.get('vector_id', ''),
+                        None,  # linked_skill_id default
+                        0,  # is_click_change default
+                        0,  # is_hover_change default
+                        None  # hover_tooltip default
                     )
                 )
                 obj['id'] = cursor.lastrowid
                 state['object_ids'].append(obj['id'])
                 updated_objects_nums += 1
                 
+                # Collect vector_id and sql_id for batch metadata update
+                if obj.get('vector_id'):
+                    vector_sql_id_pairs.append((obj['vector_id'], obj['id']))
                 print(f"Stored new object: ID={obj['id']}, Content='{obj['content'][:20]}...', Vector_ID={obj.get('vector_id', 'N/A')}")
             else:
-                if 'vector_id' in obj:
+                # UPDATE EXISTING OBJECT: Object already exists in database
+                if 'vector_id' in obj and obj['id'] is not None:
+                    # Update all fields for existing objects to reflect current state
+                    image_blob = self._encode_image_blob(obj['image'])
+                    hash_blob = pickle.dumps(obj['hash'])
+                    
+                    # POSITION HISTORY UPDATE: Get existing history and append current position
+                    cursor.execute("SELECT history_centers FROM objects WHERE id = ?", (obj['id'],))
+                    existing_history = cursor.fetchone()
+                    if existing_history and existing_history[0]:
+                        history_centers = json.loads(existing_history[0])
+                    else:
+                        # Fallback: if no history exists, initialize with empty list
+                        history_centers = []
+                        print(f"📍 POSITION HISTORY MISSING: Object {obj['id']}")
+                    
+                    # Add current position with smart deduplication
+                    current_pos = list(obj['center'])  # Normalize to list format
+                    
+                    # Check if this position is different from the last recorded position
+                    # This handles both duplicates and ABA scenarios correctly
+                    should_add = True
+                    if history_centers:
+                        last_pos = list(history_centers[-1]) if history_centers[-1] else []
+                        if last_pos == current_pos:
+                            should_add = False  # Same as last position, skip
+                    
+                    if should_add:
+                        history_centers.append(current_pos)
+                        print(f"📍 POSITION UPDATED: Object {obj['id']} moved to {current_pos}")
+                    # else: position unchanged, no log needed
+                    
                     cursor.execute(
-                        "UPDATE objects SET vector_id = ? WHERE id = ?", 
-                        (obj['vector_id'], obj['id'])
+                        "UPDATE objects SET content = ?, image = ?, hash = ?, area = ?, bbox = ?, center = ?, history_centers = ?, vector_id = ? WHERE id = ?", 
+                        (
+                            obj['content'],
+                            image_blob,
+                            hash_blob,
+                            obj['area'],
+                            json.dumps(obj['bbox']),
+                            json.dumps(obj['center']),
+                            json.dumps(history_centers),
+                            obj['vector_id'],
+                            obj['id']
+                        )
                     )
+                    print(f"Updated existing object: ID={obj['id']}, Content='{obj['content'][:20]}...', Vector_ID={obj.get('vector_id', 'N/A')}")
+                else:
+                    # ORPHANED OBJECT: Has vector_id but no SQL ID - this shouldn't happen
+                    print(f"🚨 ORPHANED OBJECT: Vector_ID={obj.get('vector_id', 'N/A')} but SQL ID=None for '{obj['content'][:20]}...'")
+                    print(f"    This object will be skipped in this update cycle.")
+        
+        # Batch update VectorDB metadata with SQL IDs
+        if vector_sql_id_pairs:
+            success = self.vector_memory.batch_update_object_metadata(vector_sql_id_pairs)
+            if success:
+                print(f"🔄 BATCH UPDATED VECTOR METADATA: {len(vector_sql_id_pairs)} objects")
+            else:
+                print(f"⚠️ BATCH METADATA UPDATE FAILED for {len(vector_sql_id_pairs)} objects")
         
         cursor.execute("UPDATE states SET object_ids = ? WHERE id = ?", (json.dumps(state['object_ids']), state['id']))
-        print(f"Updated objects nums: {updated_objects_nums}")
+        print(f"Updated VecDB objects nums: {updated_objects_nums}")
         print(f"Vector database stats: {self.vector_memory.get_collection_stats()}")
         conn.commit()
         return processed_objects
@@ -190,153 +337,6 @@ class LongMemory:
         image = cv2.imdecode(np.frombuffer(image_blob, np.uint8), cv2.IMREAD_COLOR)
         return image
     
-    def record_object_interaction(self, object_id: int, operation_type: str, interactivity: str, screen_change_ratio: float, state_changed: bool):
-        import time
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO object_interactions (object_id, operation_type, interactivity, screen_change_ratio, state_changed, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-            (object_id, operation_type, interactivity, screen_change_ratio, int(state_changed), time.time())
-        )
-        conn.commit()
-        print(f"Recorded interaction: Object {object_id}, {operation_type} -> {interactivity}")
-    
-    def get_object_interaction_patterns(self, object_id: int):
-        """
-        获取对象的交互模式
-        
-        Args:
-            object_id: 对象ID
-            
-        Returns:
-            dict: 包含不同操作类型的交互模式
-        """
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT operation_type, interactivity, COUNT(*) as count FROM object_interactions WHERE object_id = ? GROUP BY operation_type, interactivity ORDER BY count DESC",
-            (object_id,)
-        )
-        records = cursor.fetchall()
-        
-        patterns = {'Click': {}, 'Touch': {}}
-        for operation_type, interactivity, count in records:
-            if operation_type in patterns:
-                patterns[operation_type][interactivity] = count
-        
-        return patterns
-    
-    def update_object_interactivity(self, object_id: int, operation_type: str, interactivity: str, screen_change_ratio: float, state_changed: bool):
-        """
-        智能更新对象的交互性属性
-        
-        Args:
-            object_id: 对象ID
-            operation_type: 操作类型 ('Click', 'Touch')
-            interactivity: 当前交互性类型
-            screen_change_ratio: 屏幕变化比例
-            state_changed: 是否发生状态变化
-        """
-        # 记录交互历史
-        self.record_object_interaction(object_id, operation_type, interactivity, screen_change_ratio, state_changed)
-        
-        # 获取交互模式
-        patterns = self.get_object_interaction_patterns(object_id)
-        
-        # 智能判断对象的综合交互性
-        comprehensive_interactivity = self._determine_comprehensive_interactivity(patterns)
-        
-        # 更新对象的交互性属性
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("UPDATE objects SET interactivity = ? WHERE id = ?", (comprehensive_interactivity, object_id))
-        conn.commit()
-        print(f"Updated object {object_id} comprehensive interactivity to: {comprehensive_interactivity}")
-    
-    def _determine_comprehensive_interactivity(self, patterns: dict) -> str:
-        """
-        根据交互模式确定综合交互性
-        
-        Args:
-            patterns: 交互模式字典
-            
-        Returns:
-            str: 综合交互性类型
-        """
-        click_patterns = patterns.get('Click', {})
-        touch_patterns = patterns.get('Touch', {})
-        
-        # 如果没有交互记录，返回unknown
-        if not click_patterns and not touch_patterns:
-            return 'unknown'
-        
-        # 优先级：window_change > popup > no_effect
-        priority_order = ['click_window_change', 'touch_popup', 'click_popup', 'no_effect']
-        
-        # 收集所有交互类型
-        all_interactions = list(click_patterns.keys()) + list(touch_patterns.keys())
-        
-        # 按优先级返回最高级别的交互类型
-        for interaction_type in priority_order:
-            if interaction_type in all_interactions:
-                return interaction_type
-        
-        return 'unknown'
-    
-    def get_object_interaction_capabilities(self, object_id: int) -> dict:
-        """
-        获取对象的交互能力详情
-        
-        Args:
-            object_id: 对象ID
-            
-        Returns:
-            dict: 包含对象各种操作类型的交互能力
-        """
-        patterns = self.get_object_interaction_patterns(object_id)
-        
-        capabilities = {
-            'can_click': bool(patterns.get('Click', {})),
-            'can_touch': bool(patterns.get('Touch', {})),
-            'click_effects': list(patterns.get('Click', {}).keys()),
-            'touch_effects': list(patterns.get('Touch', {}).keys()),
-            'most_common_click_effect': max(patterns.get('Click', {}).items(), key=lambda x: x[1])[0] if patterns.get('Click') else None,
-            'most_common_touch_effect': max(patterns.get('Touch', {}).items(), key=lambda x: x[1])[0] if patterns.get('Touch') else None,
-            'interaction_count': sum(sum(effects.values()) for effects in patterns.values())
-        }
-        
-        return capabilities
-    
-    def recommend_operation_for_object(self, object_id: int, desired_effect: str = None) -> str:
-        """
-        为对象推荐最佳操作类型
-        
-        Args:
-            object_id: 对象ID
-            desired_effect: 期望的效果类型 (可选)
-            
-        Returns:
-            str: 推荐的操作类型 ('Click' 或 'Touch')
-        """
-        patterns = self.get_object_interaction_patterns(object_id)
-        
-        if desired_effect:
-            # 如果指定了期望效果，优先推荐能产生该效果的操作
-            for operation_type, effects in patterns.items():
-                if desired_effect in effects:
-                    return operation_type
-        
-        # 否则推荐交互次数最多的操作类型
-        click_count = sum(patterns.get('Click', {}).values())
-        touch_count = sum(patterns.get('Touch', {}).values())
-        
-        if click_count > touch_count:
-            return 'Click'
-        elif touch_count > click_count:
-            return 'Touch'
-        else:
-            # 如果相等，默认推荐Click
-            return 'Click'
     
     """   States   """
     def save_state(self, state):
@@ -472,7 +472,34 @@ class LongMemory:
         conn.commit()
 
         skill_id = cursor.lastrowid
+        
+        # Update linked_skill_id for objects involved in this skill
+        self._link_objects_to_skill(operations, skill_id)
+        
         return skill_id
+
+    def _link_objects_to_skill(self, operations, skill_id):
+        """Link objects involved in operations to the skill"""
+        object_ids = set()
+        
+        # Extract object IDs from operations
+        for operation in operations:
+            if isinstance(operation, dict) and 'object_id' in operation:
+                object_ids.add(operation['object_id'])
+        
+        if not object_ids:
+            print(f"No objects involved in operations for skill {skill_id}")
+            return
+        
+        # Update linked_skill_id for all involved objects in SQL database
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        for object_id in object_ids:
+            cursor.execute("UPDATE objects SET linked_skill_id = ? WHERE id = ?", (skill_id, object_id))
+        
+        conn.commit()
+        print(f"[OBJ LIBRARY] LINKED {len(object_ids)} objects to skill {skill_id}")
 
     def update_skill(self, id, fitness, num):
         conn = self.get_connection()
@@ -546,49 +573,49 @@ class LongMemory:
     
     def search_similar_objects(self, query_obj: dict, threshold: float = 0.8, top_k: int = 5):
         """
-        使用向量数据库搜索相似对象
+        Search for similar objects using vector database
         
         Args:
-            query_obj: 查询对象，包含image字段
-            threshold: 相似度阈值
-            top_k: 返回的最大结果数
+            query_obj: Query object containing image field
+            threshold: Similarity threshold
+            top_k: Maximum number of results to return
             
         Returns:
-            相似对象列表
+            List of similar objects
         """
         return self.vector_memory.find_similar_objects(query_obj, threshold, top_k)
     
     def search_objects_by_content(self, content_query: str, top_k: int = 10):
         """
-        根据内容搜索对象
+        Search objects by content
         
         Args:
-            content_query: 内容查询字符串
-            top_k: 返回的最大结果数
+            content_query: Content query string
+            top_k: Maximum number of results to return
             
         Returns:
-            匹配的对象列表
+            List of matching objects
         """
         return self.vector_memory.search_objects_by_content(content_query, top_k)
     
     def get_vector_db_stats(self):
-        """获取向量数据库统计信息"""
+        """Get vector database statistics"""
         return self.vector_memory.get_collection_stats()
     
     def clear_vector_database(self):
-        """清空向量数据库"""
+        """Clear vector database"""
         self.vector_memory.clear_database()
     
     def find_objects_in_region(self, bbox_region: list, expand_ratio: float = 0.1):
         """
-        查找指定区域内的对象
+        Find objects within specified region
         
         Args:
-            bbox_region: [x, y, w, h] 区域坐标
-            expand_ratio: 区域扩展比例
+            bbox_region: [x, y, w, h] region coordinates
+            expand_ratio: Region expansion ratio
             
         Returns:
-            区域内的对象列表
+            List of objects within the region
         """
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -599,7 +626,7 @@ class LongMemory:
         x_min, y_min, w, h = bbox_region
         x_max, y_max = x_min + w, y_min + h
         
-        # 扩展搜索区域
+        # Expand search region
         expand_w, expand_h = w * expand_ratio, h * expand_ratio
         search_x_min = max(0, x_min - expand_w)
         search_y_min = max(0, y_min - expand_h)
@@ -614,7 +641,7 @@ class LongMemory:
                 obj_center_x = obj_x + obj_w / 2
                 obj_center_y = obj_y + obj_h / 2
                 
-                # 检查对象是否在搜索区域内
+                # Check if object is within search region
                 if (search_x_min <= obj_center_x <= search_x_max and 
                     search_y_min <= obj_center_y <= search_y_max):
                     region_objects.append({
@@ -629,19 +656,19 @@ class LongMemory:
     
     def get_object_interaction_history(self, object_id: int, limit: int = 10):
         """
-        获取对象的交互历史（基于技能记录）
+        Get object interaction history (based on skill records)
         
         Args:
-            object_id: 对象ID
-            limit: 返回的最大记录数
+            object_id: Object ID
+            limit: Maximum number of records to return
             
         Returns:
-            交互历史列表
+            List of interaction history
         """
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        # 查找涉及该对象的技能
+        # Find skills involving this object
         cursor.execute('''
             SELECT s.id, s.name, s.description, s.operations, s.fitness, s.num
             FROM skills s
@@ -666,10 +693,73 @@ class LongMemory:
             })
         
         return interactions
-        
 
-
-
-
+    # TODO: below are reserved for future use
     
-
+    def update_object_clickability_by_id(self, object_id: int, is_click_change: bool):
+        """Update object clickability status"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE objects SET is_click_change = ? WHERE id = ?", (int(is_click_change), object_id))
+        conn.commit()
+        print(f"Updated object {object_id} clickability to: {is_click_change}")
+    
+    def update_object_hover_info(self, object_id: int, is_hover_change: bool, hover_tooltip: str = None):
+        """Update object hover information"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE objects SET is_hover_change = ?, hover_tooltip = ? WHERE id = ?", 
+                      (int(is_hover_change), hover_tooltip, object_id))
+        conn.commit()
+        print(f"Updated object {object_id} hover info - hoverable: {is_hover_change}, tooltip: {hover_tooltip}")
+    
+    def link_object_to_skill(self, object_id: int, skill_id: int):
+        """Link object to a related skill"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE objects SET related_skill_id = ? WHERE id = ?", (skill_id, object_id))
+        conn.commit()
+        print(f"[MEMORY] Linked object {object_id} to skill {skill_id}")
+    
+    def get_objects_by_clickability(self, is_click_change: bool = True):
+        """Get objects by clickability status"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, content, bbox, center FROM objects WHERE is_click_change = ?', (int(is_click_change),))
+        records = cursor.fetchall()
+        
+        objects = []
+        for record in records:
+            id, content, bbox_str, center_str = record
+            bbox = json.loads(bbox_str)
+            center = json.loads(center_str)
+            objects.append({
+                "id": id,
+                "content": content,
+                "bbox": bbox,
+                "center": center
+            })
+        
+        return objects
+    
+    def get_objects_with_hover_info(self):
+        """Get objects that have hover information"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, content, hover_tooltip, bbox, center FROM objects WHERE is_hover_change = 1 AND hover_tooltip IS NOT NULL')
+        records = cursor.fetchall()
+        
+        objects = []
+        for record in records:
+            id, content, hover_tooltip, bbox_str, center_str = record
+            bbox = json.loads(bbox_str)
+            center = json.loads(center_str)
+            objects.append({
+                "id": id,
+                "content": content,
+                "hover_tooltip": hover_tooltip,
+                "bbox": bbox,
+                "center": center
+            })
+        
+        return objects

@@ -11,9 +11,8 @@ class Hand:
         pyautogui.FAILSAFE = False
         
         self.game_name = config['game_name']
-        print(f"Hand initialized for game {self.game_name}")
-        print(f"Screen size: {self.screen_width}x{self.screen_height}")
-        print("PyAutoGUI fail-safe disabled - using boundary checking instead")
+        print(f"[INIT] Hand initialized for game {self.game_name}")
+        print(f"[INIT] Screen size: {self.screen_width}x{self.screen_height}")
         
     def _safe_coordinates(self, x, y):
         """Ensure coordinates are within safe bounds, avoiding screen corners."""
@@ -61,12 +60,24 @@ class Hand:
         """
         operate = operation["operate"]
         params = operation["params"]
-        
-        if operate == "Click":
+          
+        if operate == "Hover":
+            x = params["x"] + left
+            y = params["y"] + top
+            safe_x, safe_y = self._safe_coordinates(x, y)
+            # Just move mouse without clicking
+            pyautogui.moveTo(safe_x, safe_y, duration=0.3)
+            # Wait a moment for tooltip/hover effect to appear
+            time.sleep(0.5)
+            print(f"Hovered at ({safe_x}, {safe_y}) on the whole screen")
+            if (safe_x, safe_y) != (x, y):
+                print(f"Original coordinates: ({x}, {y})")
+            
+        elif operate == "Click":
             x = params["x"] + left
             y = params["y"] + top
             self.left_single_click(x, y)
-            print(f"Clicked at ({x}, {y})")
+            print(f"Clicked at ({x}, {y}) on the whole screen")
             
         elif operate == "Drag":
             x1 = params["x1"] + left
@@ -86,7 +97,7 @@ class Hand:
             pyautogui.moveTo(safe_x2, safe_y2, duration=0.2)
             # Release left mouse button
             pyautogui.mouseUp(button='left')
-            print(f"Dragged from ({safe_x1}, {safe_y1}) to ({safe_x2}, {safe_y2})")
+            print(f"Dragged from ({safe_x1}, {safe_y1}) to ({safe_x2}, {safe_y2}) on the whole screen")
             if (safe_x1, safe_y1) != (x1, y1) or (safe_x2, safe_y2) != (x2, y2):
                 print(f"Original coordinates: ({x1}, {y1}) to ({x2}, {y2})")
             
@@ -98,7 +109,7 @@ class Hand:
                 pyautogui.scroll(1)
             else:
                 pyautogui.scroll(-1)
-            print(f"Scrolled {direction} at ({x}, {y})")
+            print(f"Scrolled {direction} at ({x}, {y}) on the whole screen")
             
         elif operate == "Type":
             text = params["content"]
@@ -125,7 +136,7 @@ class Hand:
             y = params["y"] + top
             safe_x, safe_y = self._safe_coordinates(x, y)
             pyautogui.doubleClick(safe_x, safe_y)
-            print(f"Double clicked at ({safe_x}, {safe_y})")
+            print(f"Double clicked at ({safe_x}, {safe_y}) on the whole screen")
             if (safe_x, safe_y) != (x, y):
                 print(f"Original coordinates: ({x}, {y})")
             
@@ -134,7 +145,7 @@ class Hand:
             y = params["y"] + top
             safe_x, safe_y = self._safe_coordinates(x, y)
             pyautogui.click(safe_x, safe_y, button='right')
-            print(f"Right clicked at ({safe_x}, {safe_y})")
+            print(f"Right clicked at ({safe_x}, {safe_y}) on the whole screen")
             if (safe_x, safe_y) != (x, y):
                 print(f"Original coordinates: ({x}, {y})")
             
@@ -147,7 +158,7 @@ class Hand:
             pyautogui.mouseDown(button='left')  # Specify left button
             time.sleep(1)  # Long press duration
             pyautogui.mouseUp(button='left')  # Specify left button
-            print(f"Long pressed at ({safe_x}, {safe_y}) for 1 second")
+            print(f"Long pressed at ({safe_x}, {safe_y}) for 1 second on the whole screen")
             if (safe_x, safe_y) != (x, y):
                 print(f"Original coordinates: ({x}, {y})")
             

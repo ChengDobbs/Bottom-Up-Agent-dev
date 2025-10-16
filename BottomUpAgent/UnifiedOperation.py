@@ -7,6 +7,10 @@ class UnifiedOperation:
     @staticmethod
     def Click(x: int, y: int) -> dict:
         return {"operate": "Click", "params": {"x": x, "y": y}}
+    
+    @staticmethod
+    def Hover(x: int, y: int) -> dict:
+        return {"operate": "Hover", "params": {"x": x, "y": y}}
 
     @staticmethod
     def Drag(x1: int, y1: int, x2: int, y2: int) -> dict:

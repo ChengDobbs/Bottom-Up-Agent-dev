@@ -1,18 +1,19 @@
 project_name: 'SuperGamer'
 game_name: 'Slay the Spire'
-run_name: 'claude - omni - test - 2509261201'
+run_name: 'claude - omni - HashGeo - 251015004'
 close_explore: False
 close_reflexion: False
 close_reset: False
 is_base: False
 use_mcp: False
-
+max_step: 1000
 result_path: 'results'
 
 teacher_type: 'Random' # Human or AI or Random
+operates: ['Hover', 'Click']
 
 brain:
-  base_model: 'claude-sonnet-4-20250514' # gpt-4o or claude family model
+  base_model: 'claude-3-7-sonnet-20250219' # gpt-4o or claude family model
   evaluate_model: 'gpt-4o'
 
   uct_c: 5.0
@@ -20,11 +21,7 @@ brain:
 
 detector:
   type: 'omni'  # 'sam' or 'omni'
-  # config for sam
-  # sam:
-  #   sam_weights: 'weights/sam_vit_b_01ec64.pth'
-  #   sam_type: 'vit_b'
-  # config for omni
+
   omni:
     som_model_path: 'weights/icon_detect/model.pt'
     caption_model_name: 'florence2'

@@ -50,15 +50,15 @@ We select games based on the principle of **cross-platform availability via Stea
 git clone https://github.com/AngusDujw/Bottom-Up-Agent.git
 cd Bottom-Up-Agent
 ```
+## 2. Check system prerequisite
 
-
-## 2. Create & activate a Conda environment 
+## 3. Install
+### 3.1 Create & activate a Conda environment 
 ```bash
-conda create -n bottomup python=3.10 -y
-conda activate bottomup
+conda create -n bottomup python=3.10 -y; conda activate bottomup
 ```
-## 3. Install dependencies
-### 3.1 Install PaddlePaddle
+
+### 3.2 Install PaddlePaddle
 Please find your OS and CUDA version in [PaddlePaddle Installation](https://www.paddlepaddle.org.cn/en/install/quick). The current implementation relies on PaddlePaddle 3.1.0 with CUDA 11.8.
 ```bash
 pip install paddlepaddle-gpu==3.1.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/
@@ -75,7 +75,7 @@ python -c "import paddle; print(paddle.__version__); paddle.utils.run_check()"
 ```
 The current PaddlePaddle v3.1.0 does not support NCCL, please check that you have only **1 single GPU** actually enabled or in a pure CPU environment.
 
-### 3.2 Install other dependencies
+### 3.3 Install other dependencies
 ```bash
 pip install -r requirements.txt
 ```
@@ -140,18 +140,12 @@ Please adjust the in-game resolution to match the `width` and `height` specified
 |------------|------------|
 | ![Slay the Spire](figs/sts_resolution.jpg) | ![Civilization V](figs/c5_resolution.jpg) |
 
-## Launch the Crafter
-```bash
-python -m pip install pygame gymnasium crafter
-python -m demos.crafter_interactive_launcher --max-steps 1_000_000
-```
 
 ## Run on Games
 ### Slay the Spire
 ```bash
 python -m run --config config/sts/sts_explore_claude.yaml
 python -m run --config config/sts/sts_omni_claude.yaml
-python -m run --config config/sts/sts_vector_mcp_claude.yaml
 ```
 
 
@@ -170,7 +164,7 @@ To navigate through the game steps, follow these instructions:
 To visualize the agent's performance, **open a new terminal**, activate the same conda environment, and run the following command:
 
 ```bash
-python -m monitor --config_file "config/sts_omni_claude.yaml" --port 8050
+python -m monitor --config config/sts/sts_omni_claude.yaml --port 8050
 ```
 This will launch a local monitoring server that provides **real-time visualization of the agent's skill trees and library, invocation logs, and action evolution**. By default, the dashboard is available at http://localhost:8050.
 
