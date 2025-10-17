@@ -805,7 +805,7 @@ class LongMemory:
         return bool(is_hover_change) if is_hover_change is not None else False, hover_tooltip
     
     def get_objects_needing_hover_test(self, object_ids: list):
-        """Get objects that need hover testing (new objects or objects with is_hover_change=0 and hover_tooltip=None)"""
+        """Get objects that need hover testing (new objects or objects that haven't been tested yet)"""
         if not object_ids:
             return []
             
@@ -814,11 +814,14 @@ class LongMemory:
         
         # Create placeholders for the IN clause
         placeholders = ','.join('?' * len(object_ids))
+        # Test objects that need hover testing:
+        # 1. change=0, tip=NULL (new elements)
+        # 2. change=0, tip has value (should be fixed to change=1)
         cursor.execute(f'''
             SELECT id, content, bbox, center, is_hover_change, hover_tooltip 
             FROM objects 
             WHERE id IN ({placeholders}) 
-            AND (is_hover_change = 0 OR is_hover_change IS NULL OR hover_tooltip IS NULL)
+            AND is_hover_change = 0
         ''', object_ids)
         
         records = cursor.fetchall()

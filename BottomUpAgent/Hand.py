@@ -65,10 +65,7 @@ class Hand:
             x = params["x"] + left
             y = params["y"] + top
             safe_x, safe_y = self._safe_coordinates(x, y)
-            # Just move mouse without clicking
-            pyautogui.moveTo(safe_x, safe_y, duration=0.3)
-            # Wait a moment for tooltip/hover effect to appear
-            time.sleep(0.5)
+            pyautogui.moveTo(safe_x, safe_y, duration=0.05)
             print(f"Hovered at ({safe_x}, {safe_y}) on the whole screen")
             if (safe_x, safe_y) != (x, y):
                 print(f"Original coordinates: ({x}, {y})")

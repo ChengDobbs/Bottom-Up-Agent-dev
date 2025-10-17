@@ -350,9 +350,8 @@ class Brain:
                 id = self.long_memory.save_skill(response['function']['input']['name'], response['function']['input']['description'], 
                                             operations_to_save, 0, 1, state_id, mcst_node_id, obs[0]['screen'], obs[-1]['screen'], skill_type=0)
                 print(f"save skill: {response['function']['input']['name']}, operations: {operations_str}, fitness: {0}, skill_type: PROGRESS_CONTRIBUTING")
-                return {"id": id, "name": response['function']['input']['name'], "description": response['function']['input']['description']}
+                return {"id": id, "name": response['function']['input']['name'], "description": response['function']['input']['description'], "skill_type": 0}
             elif response['function']['name'] == "incomplete_skill":
-                # Handle incomplete skill - save as temporary skill and signal for MCP continuation
                 print(f"incomplete skill detected: {response['function']['input']['name']}")
                 print(f"description: {response['function']['input']['description']}")
                 
@@ -376,6 +375,7 @@ class Brain:
                     "id": id, 
                     "name": response['function']['input']['name'], 
                     "description": response['function']['input']['description'],
+                    "skill_type": 1,  # NAVIGATION_ONLY for incomplete skills
                     "incomplete": True,
                     "next_action_hint": hint_data
                 }

@@ -76,7 +76,7 @@ def generate_skill_tools(model_name):
                                     "description": "What should happen after performing this action"
                                 }
                             },
-                            "required": ["action_type", "reasoning", "expected_outcome"],
+                            "required": ["action_type", "target_coordinates", "reasoning", "expected_outcome"],
                             "additionalProperties": False
                         }
                     },

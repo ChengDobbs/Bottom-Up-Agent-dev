@@ -303,11 +303,12 @@ class BottomUpAgent:
         print(f"[HOVER] Found {len(valid_objects)} total objects, {sample_size} need hover testing")
         
         hoverable_count = 0
+        screen_before = self.get_observation()['screen'].copy()
         for i, obj in enumerate(shuffled_objects, 1):
             object_id = obj['id']
             
             try:
-                has_change = self.regional_hover_detect(obj, state, hover_threshold)
+                has_change = self.regional_hover_detect(obj, state, hover_threshold, screen_before)
                 if has_change:
                     hoverable_count += 1
                     print(f"[HOVER] {i}/{sample_size} Object {object_id}: HAS effect ✓")
@@ -319,30 +320,26 @@ class BottomUpAgent:
         print(f"[HOVER] Complete: {hoverable_count}/{sample_size} hoverable objects tested\n")
         return {'explored': sample_size, 'hoverable': hoverable_count}
     
-    def regional_hover_detect(self, obj, state, hover_threshold):
+    def regional_hover_detect(self, obj, state, hover_threshold, screen_before):
         import cv2
         import numpy as np
         
         x, y = obj['center'][0], obj['center'][1]
         
-        # Get screen before hover
-        screen_before = self.get_observation()['screen'].copy()
-        
         # Execute hover
         hover_op = {'operate': 'Hover', 'params': {'x': x, 'y': y}}
         operation_ = self.operate_grounding(hover_op, state)
+        
         if operation_ is None:
             return False
-            
+        # reset, then get screen_before
+
         self.hand.do_operation(operation_, self.eye.left, self.eye.top)
-        time.sleep(0.5)  # Wait for tooltip
+        screen_after = self.get_observation()['screen'].copy()
         
-        # Get screen after hover
-        screen_after = self.get_observation()['screen']
-        
-        # Calculate 1/3 screen region around hover position
+        # Calculate 1/2 screen region around hover position
         screen_h, screen_w = screen_before.shape[:2]
-        region_w = screen_w // 3
+        region_w = screen_w // 2
         region_h = screen_h // 2
         x1 = max(0, x - region_w // 2)
         y1 = max(0, y - region_h // 2)
@@ -365,34 +362,23 @@ class BottomUpAgent:
         if change_percentage <= hover_threshold:
             return False
         
-        # Detect new text objects in the region
-        objects_before = self.detector.extract_objects_omni(screen_before)
-        objects_after = self.detector.extract_objects_omni(screen_after)
-        
-        # Get content from objects before hover in the region
-        before_contents = set()
-        for obj_before in objects_before:
-            obj_x, obj_y = obj_before.get('center', [0, 0])
-            if (x1 <= obj_x <= x2 and y1 <= obj_y <= y2 and 
-                (obj_before.get('type') == 'text' or (obj_before.get('type') == 'icon' and obj_before.get('area') > 3500))):
-                before_contents.add(obj_before.get('content'))
-        
-        # Find new text objects after hover in the region
-        new_text_objects = []
-        print(f"region after hover: x1: {x1}, y1: {y1}, x2: {x2}, y2: {y2}")
-        for obj_after in objects_after:
-            obj_x, obj_y = obj_after.get('center', [0, 0])
-            if (x1 <= obj_x <= x2 and y1 <= obj_y <= y2 and 
-                (obj_after.get('type') == 'text' or (obj_after.get('type') == 'icon' and obj_after.get('area') > 3500))):
-                content = obj_after.get('content')
-                if content and len(content) > 3 and content not in before_contents:
-                    new_text_objects.append(obj_after)
-        # Only consider it a hover change if new text objects are found
-        has_hover_change = len(new_text_objects) > 0
+        # Efficiently detect object differences in the region
+        new_text_objects = self._detect_object_differences_in_region(
+            screen_before, screen_after, x1, y1, x2, y2
+        )
+        # Separate hover visual change from tooltip text
+        # has_hover_change: any visual change (highlight, border, color, etc.) OR text tooltip
+        # hover_tooltip: specific text content that appears
         tooltip_text = None
+        has_tooltip = len(new_text_objects) > 0
         
-        if has_hover_change:
+        if has_tooltip:
             tooltip_text = ' \\ '.join([obj.get('content', '') for obj in new_text_objects])
+        
+        # has_hover_change should be True if:
+        # 1. There's a tooltip (text appears), OR
+        # 2. There's visual change (pixel difference)
+        has_hover_change = has_tooltip or (change_percentage > hover_threshold)
         
         # Update database with hover info
         self.brain.long_memory.update_object_hover_info(
@@ -402,6 +388,78 @@ class BottomUpAgent:
         )
         
         return has_hover_change
+    
+    def _detect_object_differences_in_region(self, screen_before, screen_after, x1, y1, x2, y2):
+        # Extract objects from both screenshots
+        objects_before = self.detector.extract_objects_omni(screen_before)
+        objects_after = self.detector.extract_objects_omni(screen_after)
+        
+        # Filter objects in the region for both states
+        before_objects = self._filter_objects_in_region(objects_before, x1, y1, x2, y2)
+        after_objects = self._filter_objects_in_region(objects_after, x1, y1, x2, y2)
+        
+        print(f"region after hover: x1: {x1}, y1: {y1}, x2: {x2}, y2: {y2}")
+        print(f"Before: {len(before_objects)} objects, After: {len(after_objects)} objects")
+        
+        # Find new objects by comparing object-level features
+        new_text_objects = self._find_new_objects(before_objects, after_objects)
+        
+        print(f"Found {len(new_text_objects)} new text objects in hover region")
+        return new_text_objects
+    
+    def _filter_objects_in_region(self, objects, x1, y1, x2, y2):
+        """Filter objects that are in the specified region and are text/icon type."""
+        filtered = []
+        for obj in objects:
+            obj_x, obj_y = obj.get('center', [0, 0])
+            if (x1 <= obj_x <= x2 and y1 <= obj_y <= y2 and 
+                (obj.get('type') == 'text' or (obj.get('type') == 'icon' and obj.get('area', 0) > 3500))):
+                filtered.append(obj)
+        return filtered
+    
+    def _find_new_objects(self, before_objects, after_objects):
+        """Find new objects by comparing position, type, content, and area."""
+        new_objects = []
+        
+        for after_obj in after_objects:
+            is_new = True
+            
+            # Check if this object existed in before state
+            for before_obj in before_objects:
+                if self._objects_are_same(before_obj, after_obj):
+                    is_new = False
+                    break
+            
+            if is_new:
+                # Additional check: ensure it has meaningful content
+                content = after_obj.get('content', '')
+                if content and len(content) > 3:
+                    new_objects.append(after_obj)
+        
+        return new_objects
+    
+    def _objects_are_same(self, obj1, obj2):
+        pos1 = obj1.get('center', [0, 0])
+        pos2 = obj2.get('center', [0, 0])
+        distance = ((pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2)**0.5
+        if distance > 20:  # More than 20 pixels apart
+            return False
+        
+        # Content check (exact match)
+        content1 = obj1.get('content', '')
+        content2 = obj2.get('content', '')
+        if content1 != content2:
+            return False
+        
+        # Area check (allow small size changes)
+        area1 = obj1.get('area', 0)
+        area2 = obj2.get('area', 0)
+        if area1 > 0 and area2 > 0:
+            area_diff = abs(area1 - area2) / max(area1, area2)
+            if area_diff > 0.2:
+                return False
+        
+        return True
     
     def _is_center_in_bbox(self, center, bbox):
         """Check if center point is inside bbox. Bbox format: [x, y, w, h] (xywh)."""
@@ -987,37 +1045,61 @@ class BottomUpAgent:
                         hint_info = new_skill['next_action_hint']
                         try:
                             # Build hint operation from hint_info
-                            hint_operation = {
-                                'operate': hint_info.get('action_type', 'Click'),
-                                'params': {
-                                    'x': int(hint_info['target_coordinates'][0]),
-                                    'y': int(hint_info['target_coordinates'][1])
-                                } if 'target_coordinates' in hint_info else {}
-                            }
+                            action_type = hint_info.get('action_type', 'Click')
+                            hint_operation = {'operate': action_type, 'params': {}}
+                            
+                            # Extract coordinates based on action type
+                            if 'target_coordinates' in hint_info and hint_info['target_coordinates']:
+                                coords = hint_info['target_coordinates']
+                                if action_type == 'Click' and len(coords) >= 2:
+                                    hint_operation['params'] = {
+                                        'x': int(coords[0]),
+                                        'y': int(coords[1])
+                                    }
+                                elif action_type == 'Drag' and len(coords) >= 4:
+                                    hint_operation['params'] = {
+                                        'x1': int(coords[0]),
+                                        'y1': int(coords[1]),
+                                        'x2': int(coords[2]),
+                                        'y2': int(coords[3])
+                                    }
+                                elif action_type == 'Key' and 'keyboard_key' in hint_info:
+                                    hint_operation['params'] = {
+                                        'key': hint_info['keyboard_key']
+                                    }
+                                else:
+                                    print(f"[HINT] Warning: Invalid coordinates for action type {action_type}: {coords}")
+                                    hint_operation = None
+                            else:
+                                print(f"[HINT] Warning: No target_coordinates found in hint: {hint_info}")
+                                hint_operation = None
                                                         
                             # Get current observation
                             current_obs = self.get_observation()
                             
                             # Execute the hint operation
-                            operation_ = self.operate_grounding(hint_operation, current_obs)
-                            if operation_ is not None:
-                                self.hand.do_operation(operation_, self.eye.left, self.eye.top)
-                                print("[HINT] Waiting for hint operation to complete...")
-                                time.sleep(self.exec_duration)
-                                
-                                # Get new observation after hint execution
-                                new_obs = self.get_observation()
-                                
-                                # Check if hint execution was successful
-                                screen_change = self.eye.detect_acted_cv(current_obs['screen'], new_obs['screen'])
-                                print(f"[HINT] Hint operation executed, screen change: {screen_change:.3f}")
-                                
-                                # Update the incomplete skill to complete if successful
-                                if screen_change > 0.01:
-                                    self.brain.long_memory.update_skill(new_skill['id'], 1, 1)
-                                    print(f"[HINT] Skill completed: {new_skill['name']}")
+                            if hint_operation is not None:
+                                operation_ = self.operate_grounding(hint_operation, current_obs)
+                                if operation_ is not None:
+                                    self.hand.do_operation(operation_, self.eye.left, self.eye.top)
+                                    print("[HINT] Waiting for hint operation to complete...")
+                                    time.sleep(self.exec_duration)
+                                    
+                                    # Get new observation after hint execution
+                                    new_obs = self.get_observation()
+                                    
+                                    # Check if hint execution was successful
+                                    screen_change = self.eye.detect_acted_cv(current_obs['screen'], new_obs['screen'])
+                                    print(f"[HINT] Hint operation executed, screen change: {screen_change:.3f}")
+                                    
+                                    # Update the incomplete skill to complete if successful
+                                    if screen_change > 0.01:
+                                        self.brain.long_memory.update_skill_with_type(new_skill['id'], 1, 1, new_skill['skill_type'])
+                                        print(f"[HINT] Skill completed: {new_skill['name']} type: {new_skill['skill_type']}")
+                                else:
+                                    print(f"[HINT] Hint operation grounding failed")
                             else:
-                                print(f"[HINT] Hint operation grounding failed")
+                                print(f"[HINT] Skipping hint execution - invalid hint operation")
                                 
                         except Exception as e:
                             print(f"[HINT] Error executing hint action: {e}")
